@@ -83,6 +83,7 @@
   td.blue { background: #dbeafe; font-weight: 600; }
   tfoot td { border-top: 2px solid #94a3b8; font-weight: 700; background: #fff; }
   tfoot tr.grand td { background: #fef3c7; }
+  td.num.neg { color: #dc2626; font-weight: 700; }
   .reserved { border: 2px dashed #cbd5e1; border-radius: 14px; padding: 20px 22px; margin-top: 26px;
     background: #fafbfd; color: #94a3b8; }
   .reserved h3 { margin: 0 0 4px; font-size: 16px; color: #64748b; }
@@ -93,6 +94,14 @@
   .book-form { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
   .book-file b { display: block; font-size: 12px; color: #475569; margin-bottom: 4px; font-weight: 600; }
   .book-file input[type=file] { width: 340px; max-width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 13px; }
+  .loan-card { margin-top: 16px; }
+  .loan-box { margin: 10px 0 14px; padding: 12px 16px; border-radius: 12px;
+    background: linear-gradient(120deg, #f0f7ff, #e8f2ff); border: 1px solid #bfdbfe; }
+  .loan-k { font-size: 13px; color: #475569; }
+  .loan-v { font-size: 26px; font-weight: 700; color: #1d4ed8; margin-left: 10px; }
+  .loan-v small { font-size: 14px; font-weight: 400; color: #64748b; }
+  .loan-card .book-file input { width: 200px; max-width: 100%; padding: 8px 12px;
+    border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 13px; }
   .result-box { margin-top: 14px; padding: 12px 14px; border: 1px solid #bfdbfe; background: #f0f7ff; border-radius: 10px; }
   .result-box.err { border-color: #fecaca; background: #fef2f2; }
   .res-row { font-size: 14px; line-height: 1.9; }
@@ -107,6 +116,36 @@
     border-top-color: #2563eb; border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   footer { margin-top: 26px; color: #94a3b8; font-size: 12px; line-height: 1.8; }
+
+  /* 移动端：避免窄屏出现横向滚动条 */
+  @media (max-width: 700px) {
+    header.hero { padding: 20px 18px; }
+    .card { padding: 16px; }
+    .card-head { flex-wrap: wrap; gap: 8px; }
+    .quota-box { padding: 14px 16px; }
+    .quota-num { font-size: 32px; }
+    .quota-cell .quota-num { font-size: 28px; }
+    .overlay .box { padding: 24px 22px; }
+
+    /* 更新数据面板：窄屏隐藏文件名与上传日期两列，只保留用途 */
+    .cache-table .col-file, .cache-table .col-date { display: none; }
+    .cache-table th, .cache-table td { white-space: normal; word-break: break-word; }
+
+    /* 订舱发货上传：改纵向堆叠并占满整行，消除 340px 固定宽带来的溢出 */
+    .book-form { flex-direction: column; align-items: stretch; gap: 10px; }
+    .book-file { min-width: 0; }
+    .book-file input[type=file] { width: 100%; max-width: 100%; }
+    .book-form .btn { width: 100%; }
+    .loan-card .book-file input { width: 100%; }
+    .loan-v { font-size: 22px; margin-left: 6px; }
+
+    /* 长文件名/合同号兜底换行 */
+    .res-row, .miss-list, .err-item { overflow-wrap: anywhere; word-break: break-word; }
+  }
+  @media (max-width: 380px) {
+    .quota-num { font-size: 26px; }
+    .quota-cell .quota-num { font-size: 24px; }
+  }
 </style>
 </head>
 <body>
@@ -127,9 +166,9 @@
         <div class="cache-title">数据缓存：本次未重新上传的文件将沿用上次数据</div>
         {% if region.has_cache %}
         <table class="cache-table">
-          <tr><th>用途</th><th>文件名</th><th>上传日期</th></tr>
+          <tr><th>用途</th><th class="col-file">文件名</th><th class="col-date">上传日期</th></tr>
           {% for f in region.fields %}
-          <tr><td>{{ f.label }}</td><td>{{ f.original or '（无）' }}</td><td>{{ f.uploaded_at or '（无记录）' }}</td></tr>
+          <tr><td>{{ f.label }}</td><td class="col-file">{{ f.original or '（无）' }}</td><td class="col-date">{{ f.uploaded_at or '（无记录）' }}</td></tr>
           {% endfor %}
         </table>
         <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。</div>
@@ -192,7 +231,7 @@
           </div>
           <div class="quota-cell">
             <div class="quota-label">余额</div>
-            <div class="quota-num{% if b.balance_wan < 0 %} neg{% endif %}">{{ b.balance_wan | f2 }}<small> 万元</small></div>
+            <div class="quota-num{% if b.balance_wan - region.loan.amount < 0 %} neg{% endif %}">{{ (b.balance_wan - region.loan.amount) | f2 }}<small> 万元</small></div>
           </div>
         </div>
         {% else %}
@@ -213,8 +252,31 @@
         <button class="btn primary" onclick="toggle('upload-{{ region.id }}')">更新数据</button>
       </div>
 
-      <div id="table-{{ region.id }}" class="hidden">
+            <div id="table-{{ region.id }}" class="hidden">
         <div class="table-wrap">
+          {% if region.has_booking %}
+          <table>
+            <thead><tr><th>合同号</th><th class="num">已回款金额</th><th class="num">已发货合同金额</th><th class="num">预发货金额</th><th class="num">余额</th></tr></thead>
+            <tbody>
+            {% for row in region.view_rows %}
+              <tr>
+                <td {% if row.has_a %}class="blue"{% endif %}>{{ row.contract }}</td>
+                <td class="num">{{ row.col2 | f2 }}</td>
+                <td class="num">{{ row.col3 | f2 }}</td>
+                <td class="num">{% if row.pre %}{{ row.pre | f2 }}{% endif %}</td>
+                <td class="num{% if row.bal < 0 %} neg{% endif %}">{{ row.bal | f2 }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr><td>合计</td><td class="num">{{ r.sum2 | f2 }}</td><td class="num">{{ r.sum3 | f2 }}</td><td class="num">{{ region.book_sum | f2 }}</td><td class="num{% if region.bal_sum < 0 %} neg{% endif %}">{{ region.bal_sum | f2 }}</td></tr>
+              <tr><td>固定额度（{{ r.fixed | f2 }}万）</td><td></td><td></td><td></td><td class="num">{{ r.fixed | f2 }}</td></tr>
+              <tr><td>未确认回款</td><td></td><td></td><td></td><td class="num">{{ r.llc | f2 }}</td></tr>
+              <tr class="grand"><td>发货可用额度</td><td></td><td></td><td></td><td class="num">{{ r.grand | f2 }}</td></tr>
+              <tr class="grand"><td>余额（本次发货后）</td><td></td><td></td><td class="num">{{ region.book_sum | f2 }}</td><td class="num{% if region.balance_after is not none and region.balance_after < 0 %} neg{% endif %}">{% if region.balance_after is not none %}{{ region.balance_after | f2 }}{% else %}&mdash;{% endif %}</td></tr>
+            </tfoot>
+          </table>
+          {% else %}
           <table>
             <thead><tr><th>合同号</th><th class="num">已回款金额</th><th class="num">已发货合同金额</th><th class="num">可用额度</th></tr></thead>
             <tbody>
@@ -234,9 +296,9 @@
               <tr class="grand"><td>发货可用额度</td><td></td><td></td><td class="num">{{ r.grand | f2 }}</td></tr>
             </tfoot>
           </table>
+          {% endif %}
         </div>
       </div>
-
       {{ upload_panel(region) }}
 
       {% else %}
@@ -319,13 +381,36 @@
       {% endif %}
       {% endif %}
     </div>
+
+    <div class="card loan-card">
+      <div class="card-head">
+        <h3>借款额</h3>
+      </div>
+      <p class="note">最近更新时间：{{ region.loan.updated_at or '（暂无记录）' }}</p>
+      <div class="loan-box">
+        <span class="loan-k">当前借款额</span>
+        <span class="loan-v">{{ region.loan.amount | f2 }}<small> 万元</small></span>
+      </div>
+      <form class="book-form" method="post" action="{{ url_for('loan') }}" onsubmit="return startBusy('loan', this)">
+        <input type="hidden" name="region" value="{{ region.id }}">
+        <label class="book-file">
+          <b>借款额（万元，不小于 0）</b>
+          <input type="number" name="amount" min="0" step="0.01" placeholder="请输入借款额" required>
+        </label>
+        <label class="book-file">
+          <b>更新密码</b>
+          <input type="password" name="password" placeholder="请输入密码" required>
+        </label>
+        <button class="btn primary" type="submit">更新借款额</button>
+      </form>
+    </div>
     {% endif %}
   </section>
   {% endfor %}
 
   <footer>
     说明：已回款金额 = 表B+表E抵佣金+表R 三表按合同汇总（万元）；已发货合同金额 = 组A有日期梯的表C J 列合计（万元）；
-    可用额度 = 已回款金额 − 已发货合同金额；发货可用额度 = Σ可用额度 + 固定额度 + 未确认回款(ASTRO-LIFT 2026年起无合同号)。
+    可用额度 = 已回款金额 − 已发货合同金额；发货可用额度 = Σ可用额度 + 固定额度 + 未确认回款(ASTRO-LIFT 2026年起无合同号)。算过发货申请后，明细会联动增加“预发货金额”，余额 = 已回款 − 已发货 − 预发货（负数红字），底部“余额（本次发货后）” = 发货可用额度 − 预发货合计；未上传申请时仍为原4列。
     首列浅蓝 = 该合同存在已发货(组A)梯。上传缓存仅在运行成功时更新，失败保留上一次数据。
   </footer>
 </div>
@@ -352,6 +437,9 @@ function startBusy(kind, form){
   if (kind === 'run') {
     title.textContent = '正在更新额度…';
     est.textContent = '预计 1~3 分钟（读取 4 张台账，文件较大）';
+  } else if (kind === 'loan') {
+    title.textContent = '正在更新借款额…';
+    est.textContent = '预计几秒（重写该大区的下载 Excel）';
   } else {
     title.textContent = '正在计算总价…';
     est.textContent = '预计约 1 分钟（需读取表C台账）';
@@ -367,7 +455,7 @@ function startBusy(kind, form){
   var btn = form.querySelector('button[type=submit]');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = (kind === 'run') ? '运行中…' : '计算中…';
+    btn.textContent = (kind === 'run') ? '运行中…' : (kind === 'loan' ? '更新中…' : '计算中…');
   }
   var action = form.getAttribute('action') || form.action;
   fetch(action, { method: 'POST', body: new FormData(form) })
@@ -385,7 +473,7 @@ function startBusy(kind, form){
     .catch(function(err){
       if (window.__busyTimer) { window.clearInterval(window.__busyTimer); window.__busyTimer = null; }
       overlay.classList.remove('show');
-      if (btn) { btn.disabled = false; btn.textContent = (kind === 'run') ? '重新运行' : '重新计算'; }
+      if (btn) { btn.disabled = false; btn.textContent = (kind === 'run') ? '重新运行' : (kind === 'loan' ? '重新更新' : '重新计算'); }
       alert('请求失败：' + ((err && err.message) || err) + '，请重试');
     });
   return false;

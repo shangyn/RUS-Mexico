@@ -654,7 +654,7 @@ def _write_outputs(result, region, output_dir):
     print(f"[输出] HTML : {html_path}")
 
 
-def _write_excel(result, xlsx_path):
+def _write_excel(result, xlsx_path, loan=None):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -668,6 +668,7 @@ def _write_excel(result, xlsx_path):
     top_fill = PatternFill("solid", fgColor="BDD7EE")
     total_fill = PatternFill("solid", fgColor="FFF2CC")
     bold = Font(bold=True)
+    red = Font(bold=True, color="FF0000")
     thin = Side(style="thin", color="B0B0B0")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
@@ -695,6 +696,12 @@ def _write_excel(result, xlsx_path):
         (f"{'LLC无合同号回款'}", None, None, result["llc"], None, None),
         ("发货可用额度", None, None, result["grand"], bold, total_fill),
     ]
+    loan = float(loan or 0)
+    if loan > 0:
+        final_balance = round(float(result.get("grand") or 0) - loan, 4)
+        footer.append(("借款额", None, None, loan, None, None))
+        footer.append(("最终余额", None, None, final_balance,
+                       red if final_balance < 0 else bold, total_fill))
     ws.cell(row=ws.max_row + 1, column=1).border = Border(top=Side(style="double"))
     for label, v2, v3, v4, font, fill in footer:
         ws.append([label, v2 if v2 is not None else None,
@@ -763,6 +770,143 @@ def _write_html(result, html_path):
 </body></html>"""
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html)
+
+
+# ---------------- 区域明细 x 发货申请联动（预发货金额 + 余额） ----------------
+
+def merge_booking_into_rows(result, booking):
+    """按合同号把最近一次发货申请金额(万元)并入区域明细行。
+
+    返回 (rows, book_sum, bal_sum)：
+      rows 每项 dict(contract, col2, col3, has_a, pre, bal)
+        pre = 本次申请预发货金额(万元)；bal = 余额 = 已回款(col2) - 已发货(col3) - 预发货(pre)
+    """
+    book_wan = {}
+    for lt in booking.get("line_totals") or []:
+        c = str(lt.get("contract") or "").strip().upper()
+        if not c:
+            continue
+        try:
+            amt = float(lt.get("total_rmb") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        book_wan[c] = round(book_wan.get(c, 0.0) + amt / 10000.0, 4)
+    rows = []
+    book_sum = 0.0
+    bal_sum = 0.0
+    for r in result.get("rows") or []:
+        contract = str(r.get("contract") or "").strip()
+        pre = book_wan.get(contract.upper(), 0.0)
+        col2 = float(r.get("col2") or 0)
+        col3 = float(r.get("col3") or 0)
+        bal = round(col2 - col3 - pre, 4)
+        rows.append({
+            "contract": contract,
+            "col2": col2, "col3": col3,
+            "has_a": bool(r.get("has_a")),
+            "pre": round(pre, 4), "bal": bal,
+        })
+        book_sum += pre
+        bal_sum += bal
+    return rows, round(book_sum, 4), round(bal_sum, 4)
+
+
+def _write_excel_linked(result, booking, xlsx_path, loan=None):
+    """有发货申请时的区域明细 Excel：5 列（...预发货金额 | 余额），负数红字。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    rows, book_sum, bal_sum = merge_booking_into_rows(result, booking)
+    headers = ["合同号", "已回款金额", "已发货合同金额", "预发货金额", "余额"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "发货额度统计"
+    head_fill = PatternFill("solid", fgColor="D9D9D9")
+    top_fill = PatternFill("solid", fgColor="BDD7EE")
+    total_fill = PatternFill("solid", fgColor="FFF2CC")
+    bold = Font(bold=True)
+    red = Font(bold=True, color="FF0000")
+    thin = Side(style="thin", color="B0B0B0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = head_fill
+        cell.font = bold
+        cell.border = border
+        cell.alignment = Alignment(horizontal="center")
+
+    for r in rows:
+        ws.append([r["contract"], r["col2"], r["col3"],
+                   r["pre"] if r["pre"] else None, r["bal"]])
+        n = ws.max_row
+        for ci in range(1, 6):
+            cell = ws.cell(row=n, column=ci)
+            cell.border = border
+            if ci in (2, 3, 4, 5):
+                cell.number_format = "#,##0.00"
+        if r["has_a"]:
+            ws.cell(row=n, column=1).fill = top_fill
+        if r["bal"] < 0:
+            ws.cell(row=n, column=5).font = Font(color="FF0000")
+
+    grand = float(result.get("grand") or 0)
+    balance_after = round(grand - book_sum, 4)
+    ws.cell(row=ws.max_row + 1, column=1).border = Border(top=Side(style="double"))
+    footer = [
+        ("合计", result.get("sum2"), result.get("sum3"), book_sum, bal_sum, bold, None),
+        (f"固定额度({result.get('fixed') or 0:g}万)", None, None, None, result.get("fixed"), None, None),
+        ("未确认回款", None, None, None, result.get("llc"), None, None),
+        ("发货可用额度", None, None, None, grand, bold, total_fill),
+        ("余额（本次发货后）", None, None, book_sum, balance_after,
+         red if balance_after < 0 else bold, total_fill),
+    ]
+    loan = float(loan or 0)
+    if loan > 0:
+        final_balance = round(balance_after - loan, 4)
+        footer.append(("借款额", None, None, None, loan, None, None))
+        footer.append(("最终余额", None, None, None, final_balance,
+                       red if final_balance < 0 else bold, total_fill))
+    for label, v2, v3, v4, v5, font, fill in footer:
+        ws.append([label, v2 if v2 is not None else None,
+                   v3 if v3 is not None else None,
+                   v4 if v4 is not None else None,
+                   v5 if v5 is not None else None])
+        n = ws.max_row
+        for ci in range(1, 6):
+            cell = ws.cell(row=n, column=ci)
+            cell.border = border
+            if font:
+                cell.font = font
+            if fill:
+                cell.fill = fill
+            if ci in (2, 3, 4, 5) and ws.cell(row=n, column=ci).value is not None:
+                ws.cell(row=n, column=ci).number_format = "#,##0.00"
+
+    for ci in range(1, 6):
+        max_len = max([len(headers[ci - 1])] +
+                      [len(str(ws.cell(row=r, column=ci).value or ""))
+                       for r in range(2, ws.max_row + 1)])
+        ws.column_dimensions[get_column_letter(ci)].width = max(10, max_len * 1.8 + 2)
+    ws.freeze_panes = "A2"
+    wb.save(xlsx_path)
+
+
+def write_region_excel(region, result, booking, out_dir, loan=None):
+    """按是否有成功的发货申请，重写大区「下载 Excel」：
+    无申请 -> 原 4 列回款明细；有申请 -> 联动 5 列（预发货金额 + 余额），负数红字。
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    prefix = str(region.get("out_prefix") or "发货额度统计")
+    xlsx_path = os.path.join(out_dir, prefix + ".xlsx")
+    if result and booking and booking.get("ok"):
+        _write_excel_linked(result, booking, xlsx_path, loan=loan)
+    elif result:
+        _write_excel(result, xlsx_path, loan=loan)
+    else:
+        return None
+    return xlsx_path
 
 
 # ---------------- 发货申请（订舱）结果落盘：Excel + JSON ----------------

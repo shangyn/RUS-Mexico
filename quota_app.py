@@ -23,12 +23,13 @@ import pandas as pd
 from flask import Flask, render_template, request, send_file, abort, redirect, url_for
 
 from quota_core import (compute_region, compute_booking, load_main_config, find_file,
-                       save_booking_result)
+                       save_booking_result, merge_booking_into_rows, write_region_excel)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.join(BASE_DIR, "workspaces", "quota")
 UPLOAD_PASSWORD = "888888"  # 部署时建议改为环境变量/config
 CACHE_META_NAME = "_cache_meta.json"
+LOAN_META_NAME = "_loan.json"
 
 app = Flask(__name__)
 app.jinja_env.filters['f2'] = lambda x: f'{x:,.2f}'
@@ -75,6 +76,37 @@ def save_cache_meta(region_id, meta):
     path = cache_meta_path(region_id)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def loan_meta_path(region_id):
+    return os.path.join(region_base(region_id), LOAN_META_NAME)
+
+
+def load_loan(region_id):
+    """读取该大区缓存的借款额（万元）；没有记录时返回 0 和空时间。"""
+    path = loan_meta_path(region_id)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {"amount": round(float(data.get("amount") or 0), 2),
+                    "updated_at": str(data.get("updated_at") or "")}
+        except Exception:
+            pass
+    return {"amount": 0.0, "updated_at": ""}
+
+
+def save_loan(region_id, amount):
+    """写入借款额缓存（万元），返回更新时间字符串。"""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    path = loan_meta_path(region_id)
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"amount": round(float(amount), 2), "updated_at": now_str},
+                  f, ensure_ascii=False, indent=2)
+    return now_str
 
 
 def _file_mtime_str(path):
@@ -125,6 +157,66 @@ def load_result(region):
     return data
 
 
+def load_booking(region_id):
+    """读取最近一次成功计算的发货申请结果；没有则返回 None。"""
+    out = region_dirs(region_id)["out"]
+    json_path = os.path.join(out, "_booking_last.json")
+    if not os.path.isfile(json_path):
+        return None
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) and data.get("ok") else None
+    except Exception:
+        return None
+
+
+def sync_booking_view(item):
+    """依据 item['result'] 与 item['booking'] 准备联动明细视图数据。"""
+    result = item.get("result")
+    booking = item.get("booking")
+    item["has_booking"] = bool(result and booking and booking.get("ok"))
+    item["view_rows"] = None
+    item["book_sum"] = 0.0
+    item["bal_sum"] = 0.0
+    item["balance_after"] = None
+    if item["has_booking"]:
+        rows, book_sum, bal_sum = merge_booking_into_rows(result, booking)
+        item["view_rows"] = rows
+        item["book_sum"] = book_sum
+        item["bal_sum"] = bal_sum
+        if isinstance(result.get("grand"), (int, float)):
+            item["balance_after"] = round(float(result["grand"]) - book_sum, 4)
+
+
+def region_excel_is_linked(out_dir, prefix):
+    """判断大区下载 Excel 是否已是含预发货金额的 5 列联动版。"""
+    path = os.path.join(out_dir, (prefix or "发货额度统计") + ".xlsx")
+    if not os.path.isfile(path):
+        return False
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True)
+        ws = wb.active
+        head = [str(c.value) for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        wb.close()
+        return head == ["合同号", "已回款金额", "已发货合同金额", "预发货金额", "余额"]
+    except Exception:
+        return False
+
+
+def ensure_region_linked(item):
+    """启动/刷新时对账：有发货申请但大区 Excel 还没联动 -> 自动补写，保证页面与下载一致。"""
+    if not (item.get("has_booking") and item.get("result")):
+        return
+    try:
+        out = region_dirs(item["id"])["out"]
+        if not region_excel_is_linked(out, item.get("out_prefix")):
+            write_region_excel(item, item["result"], item["booking"], out,
+                               loan=(item.get("loan") or {}).get("amount"))
+    except Exception:
+        pass  # 文件被占用等情况忽略，页面照常可用
+
 def fmt(x):
     return f"{x:,.2f}" if isinstance(x, (int, float)) else ""
 
@@ -148,9 +240,13 @@ def build_view():
     for region in regions:
         item = dict(region)
         item["result"] = load_result(region)
+        item["loan"] = load_loan(region["id"])
         if region.get("enabled"):
             item["fields"] = build_cache_fields(region)
             item["has_cache"] = all(f["present"] for f in item["fields"] if not f["optional"])
+            item["booking"] = load_booking(region["id"])
+            sync_booking_view(item)
+            ensure_region_linked(item)
         view.append(item)
     return view
 
@@ -201,13 +297,20 @@ def booking():
             res["grand_wan"] = grand
             res["balance_wan"] = round(grand - res["total_wan"], 4) if grand is not None else None
             res["region_name"] = target.get("name") or region_id
+            out_dir = region_dirs(region_id)["out"]
             try:
-                out_dir = region_dirs(region_id)["out"]
+                # 联动：把本次申请并入大区「下载 Excel」（预发货金额 + 余额）
+                write_region_excel(target, target.get("result"), res, out_dir)
+            except Exception as e3:
+                res["save_error"] = "区域明细联动失败（若Excel正打开下载文件，请关闭后重新计算一次）：" + str(e3)
+            try:
                 xlsx_path = save_booking_result(res, target, out_dir)
                 res["excel_name"] = os.path.basename(xlsx_path)
             except Exception as e2:
-                res["save_error"] = str(e2)
+                prev = res.get("save_error")
+                res["save_error"] = ((prev + "；") if prev else "") + "明细Excel保存失败：" + str(e2)
         target["booking"] = res
+        sync_booking_view(target)
         return render_page(view)
     except Exception as e:
         return set_error("计算失败：" + str(e))
@@ -254,6 +357,17 @@ def run():
         shutil.rmtree(stage)
     os.makedirs(stage_data, exist_ok=True)
     os.makedirs(stage_out, exist_ok=True)
+
+    # 备份最近一次发货申请（数据重算提交会整体替换输出目录）
+    prev_booking_raw = None
+    if os.path.isdir(final_out):
+        _prev_path = os.path.join(final_out, "_booking_last.json")
+        try:
+            if os.path.isfile(_prev_path):
+                with open(_prev_path, "rb") as f:
+                    prev_booking_raw = f.read()
+        except OSError:
+            prev_booking_raw = None
 
     meta_old = load_cache_meta(region_id)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -363,7 +477,69 @@ def run():
     if os.path.isdir(stage):
         shutil.rmtree(stage, ignore_errors=True)
     save_cache_meta(region_id, meta_new)
+
+    # 数据更新后：沿用最近一次发货申请并重新联动（总额度/余额按新结果刷新）
+    if prev_booking_raw:
+        try:
+            booking = json.loads(prev_booking_raw.decode("utf-8"))
+            result_json = os.path.join(final_out, f"_result_{region_id}.json")
+            if booking and booking.get("ok") and os.path.isfile(result_json):
+                with open(result_json, "r", encoding="utf-8") as f:
+                    result = yaml.safe_load(f)
+                grand = result.get("grand")
+                if isinstance(grand, (int, float)) and isinstance(booking.get("total_wan"), (int, float)):
+                    booking["grand_wan"] = float(grand)
+                    booking["balance_wan"] = round(float(grand) - float(booking["total_wan"]), 4)
+                booking["region_name"] = region.get("name")
+                save_booking_result(booking, region, final_out)
+                write_region_excel(region, result, booking, final_out,
+                                   loan=load_loan(region_id)["amount"])
+        except Exception as e:
+            print("重算后联动发货申请失败（可忽略）：", e)
+
     return redirect(url_for("index", msg="运行完成，已更新「" + region["name"] + "」", _anchor=region_id))
+
+
+@app.route("/loan", methods=["POST"])
+def loan():
+    """更新某大区借款额（万元）：密码校验 -> 写缓存 -> 立即重写该大区下载 Excel。"""
+    regions = load_regions()
+    region_id = request.form.get("region", "")
+    region = next((r for r in regions if r["id"] == region_id and r.get("enabled")), None)
+
+    def back(text):
+        return redirect(url_for("index", msg=text, _anchor=region_id))
+
+    if region is None:
+        return back("无效或未启用的区域")
+    if request.form.get("password", "") != UPLOAD_PASSWORD:
+        return back("密码错误")
+
+    raw = (request.form.get("amount") or "").strip()
+    try:
+        amount = round(float(raw), 2)
+    except ValueError:
+        return back("借款额请填写数字（万元）")
+    if amount < 0:
+        return back("借款额不能为负数")
+
+    save_loan(region_id, amount)
+
+    # 立刻重写该大区下载 Excel，保证下载到的表格与页面一致
+    warn = ""
+    try:
+        result = load_result(region)
+        if result:
+            write_region_excel(region, result, load_booking(region_id),
+                               region_dirs(region_id)["out"], loan=amount)
+    except PermissionError:
+        warn = "；但 Excel 正被占用，表格未刷新，请关闭 Excel 后重新提交"
+    except Exception as e:
+        warn = "；Excel 刷新失败：" + str(e)
+
+    return redirect(url_for("index",
+                            msg="借款额已更新为 " + f"{amount:,.2f}" + " 万元" + warn,
+                            _anchor=region_id))
 
 
 @app.route("/download/<region_id>")
