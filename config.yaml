@@ -1,0 +1,113 @@
+# ============================================================
+# 发货合同收款统计 — 配置文件
+# 列位置变化、筛选条件调整时，只改此文件，不改代码
+# ============================================================
+
+# ---- 文件路径 ----
+paths:
+  data_dir: "数据源"
+  output_dir: "输出"
+  table_b: "24-26年外币回款台账1(4).xlsx"
+  table_c: "国贸合同标的台账(10).xlsx"
+  table_d: "国家-市场-业务员6.2(1).xlsx"
+  table_e: "gm_ht_hthkmx(44).xls"
+  table_r: "人民币回款台账1.xlsx"
+  exchange_rate: "汇率对应txt.txt"
+  output_table_f: "表F_发货合同收款统计.xlsx"
+  output_table_f1: "表F1_发货合同收款统计(全量).xlsx"
+  error_log: "报错文档.xlsx"
+
+# ---- 表B: 三个年度sheet的列名映射 ----
+table_b:
+  sheets:
+    2024:
+      amount_col: "金额（小）"      # K列
+      fee_col: "手续费"            # V列
+      contract_col: "合同号"       # Q列
+      currency_col: "币种"         # L列
+      tid_col: "梯号"              # R列（合同号下一列，含DHT/DYT时回款归属梯号合同）
+      remark_col: "备注"           # X列
+    2025:
+      amount_col: "收款金额"        # L列
+      fee_col: "实收手续费"         # T列
+      contract_col: "合同号"        # R列
+      currency_col: "币种"          # M列
+      tid_col: "梯号"              # S列
+      remark_col: "备注"           # V列
+    2026:
+      amount_col: "收款金额"        # K列
+      fee_col: "实收手续费"         # S列
+      contract_col: "合同号"        # Q列
+      currency_col: "币种"          # L列
+      tid_col: "梯号"              # R列
+      remark_col: "备注"           # U列
+
+# ---- 表C: 国贸合同标的台账 关键列名 ----
+table_c:
+  sheet: "sheet1"
+  contract_col: "合同编号"          # A列
+  amount_col: "合同额（人民币）"     # J列
+  rate_col: "汇率"                  # I列
+  date_col: "组A日期"               # AZ列
+  status_col: "产品状态"            # BA列
+  country_col: "国家"               # BC列
+  payment_col: "付款方式"           # AB列
+  sales_col: "业务员"               # BB列
+  ratio_col: "已回款比例（原币）"   # BN列
+
+# ---- 表D: 国家-市场-业务员表 ----
+table_d:
+  sheet3:
+    name: "Sheet3"
+    country_col: "国家"               # A列
+    module_col: "2026年对应模块"       # D列
+    region_col: "2026九大区"           # E列
+  sales_market:
+    name: "业务员-市场"
+    country_col: "国家"               # A列
+    module_col: "模块"                # B列
+    manager_col: "模块经理"            # D列
+
+# ---- 表E: gm_ht_hthkmx 合同回款明细 ----
+table_e:
+  contract_col: "合同编号"          # A列
+  type_col: "款项类型"              # I列
+  amount_col: "回款金额(原币)"        # K列
+  currency_col: "币种"              # P列
+  header_rows: 2                    # 前2行为标题(Row0标题, Row1单位)，列名在Row2
+
+# ---- 表R: 人民币回款台账 ----
+table_r:
+  sheets: ["2025", "2026"]         # 只使用这两个sheet
+  amount_col: "金额"                # E列
+  contract_col: "合同号"            # F列
+  nature_col: "回款性质"            # G列 — 含DHT/DYT时回款归属该合同号
+
+# ---- 筛选条件 ----
+filters:
+  date_start: "2025-01-01"              # AZ列 起始日期（含）
+  exclude_country_pattern: "新加坡"      # 排除BC列包含此关键词的国家
+  exclude_status: "已作废"              # 排除BA列为此值的合同
+  contract_year_start: 25               # 只保留合同号年份 >= 此值的合同（DHT/DYT-YYXXXXX中YY>=25）
+
+# ---- 人民币币种判断 ----
+rmb_currencies: ["人民币", "人民币元", "CNY"]
+
+# ---- 回款固定合同号: 固定追加到表F的合同 ----
+table_fixed:
+  file: "回款固定合同号.xlsx"
+  header_rows: 2                    # Row0标题, Row1副标题，Row2为列头
+  columns:
+    contract_col: "合同号"
+    amount_col: "合同额"            # 已是万元
+    paid_col: "已回款"              # 已是万元
+    payment_col: "付款方式"
+    country_col: "国家"
+    module_col: "模块"
+    sales_col: "合同签订人"
+    manager_col: "模主"
+
+# ---- 数值精度 ----
+precision:
+  calc_decimals: 4        # 内部计算保留4位小数
+  display_decimals: 2     # Excel显示2位小数

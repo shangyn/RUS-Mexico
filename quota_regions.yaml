@@ -1,0 +1,25 @@
+﻿# 大区（区域）配置 —— 新增区域只在此增加一项，并在看板自动出现卡片/占位
+regions:
+  - id: russia
+    name: 俄罗斯大区
+    enabled: true
+    note: "两家ASTRO代理商 · 签订2024年起"
+    agents:
+      - "俄罗斯乌法ASTRO-LIFT"
+      - "俄罗斯ASTRO-LIFT(叶卡捷琳堡二级代理)"
+    date_start: "2024-01-01"
+    fixed_quota: 400
+    llc_company: "LLC ASTRO-LIFT"
+    llc_year_from: 2026
+    out_prefix: "发货额度统计-俄罗斯"
+
+  - id: americas
+    name: 美洲大区
+    enabled: false
+    note: "预留：后续补充代理商配置与数据"
+    agents: []
+    date_start: "2024-01-01"
+    fixed_quota: 400
+    llc_company: ""
+    llc_year_from: 2026
+    out_prefix: "发货额度统计-美洲"

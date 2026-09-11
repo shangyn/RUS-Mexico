@@ -1,0 +1,422 @@
+﻿<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发货额度看板 · 多区域</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #eef1f6; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2d3d; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
+  header.hero { border-radius: 16px; padding: 26px 30px; color: #fff;
+    background: linear-gradient(120deg, #1e3a8a, #2563eb 55%, #38bdf8);
+    box-shadow: 0 10px 24px rgba(30,58,138,.25); }
+  header.hero h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: 1px; }
+  header.hero p { margin: 0; opacity: .9; font-size: 13px; }
+  .msg { margin: 16px 0 0; padding: 12px 16px; border-radius: 10px; background: #fff7e6;
+    border: 1px solid #ffd591; color: #ad6800; font-size: 14px; }
+  h2.section { margin: 28px 0 12px; font-size: 17px; color: #334155; }
+  .tabs { display: flex; gap: 12px; margin: 20px 0 16px; flex-wrap: wrap; }
+  .tab { border: none; background: #fff; color: #475569; font-size: 15px; font-weight: 600;
+    padding: 10px 28px; border-radius: 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.06); transition: .15s; }
+  .tab:hover { color: #1d4ed8; }
+  .tab.active { background: linear-gradient(120deg, #2563eb, #3b82f6); color: #fff;
+    box-shadow: 0 4px 12px rgba(37,99,235,.35); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .card { background: #fff; border-radius: 14px; padding: 22px; box-shadow: 0 4px 14px rgba(15,23,42,.06); }
+  .card.disabled { background: #fafbfd; border: 2px dashed #cbd5e1; box-shadow: none; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .card-head h3 { margin: 0; font-size: 18px; }
+  .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+  .chip.ok { background: #dcfce7; color: #15803d; }
+  .chip.wait { background: #e2e8f0; color: #64748b; }
+  .chip.reserve { background: #f1f5f9; color: #94a3b8; }
+  .card .note { color: #94a3b8; font-size: 12px; margin: 0 0 14px; }
+  .quota-box { margin: 14px 0 16px; padding: 18px 20px; border-radius: 12px;
+    background: linear-gradient(120deg, #f0f7ff, #e8f2ff); border: 1px solid #bfdbfe; }
+  .quota-label { font-size: 13px; color: #475569; }
+  .quota-num { font-size: 40px; font-weight: 700; color: #1d4ed8; margin-top: 2px; line-height: 1.1; }
+  .quota-num small { font-size: 16px; font-weight: 400; color: #64748b; }
+  .quota-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: end; }
+  .quota-cell .quota-num { font-size: 34px; margin-top: 4px; }
+  @media (max-width: 900px) { .quota-stats { grid-template-columns: 1fr; gap: 12px; } }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .mini { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 14px; min-width: 120px; }
+  .mini .k { font-size: 11px; color: #94a3b8; }
+  .mini .v { font-size: 17px; font-weight: 700; margin-top: 2px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn { border: none; cursor: pointer; font-size: 14px; border-radius: 9px; padding: 9px 18px;
+    transition: .15s; text-decoration: none; display: inline-block; }
+  .btn.primary { background: linear-gradient(120deg, #2563eb, #3b82f6); color: #fff; box-shadow: 0 4px 10px rgba(37,99,235,.3); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.ghost { background: #fff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .btn.ghost:hover { background: #eff6ff; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:focus, .btn:active, .btn:focus-visible, button:focus, .tab:focus { outline: none !important; box-shadow: none !important; }
+  input:focus, input[type=password]:focus { outline: none !important; }
+  .empty { color: #94a3b8; font-size: 14px; text-align: center; padding: 26px 10px; }
+  .upload { margin-top: 16px; padding: 16px; border: 1.5px dashed #93c5fd;
+    background: #f8fbff; border-radius: 12px; }
+  .hidden { display: none !important; }
+  .upload .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  @media (max-width: 700px) { .upload .row { grid-template-columns: 1fr; } }
+  .field { background: #fff; border: 1px solid #e2e8f0; border-radius: 9px; padding: 8px 12px; }
+  .field b { display: block; font-size: 12px; color: #475569; margin-bottom: 4px; font-weight: 600; }
+  .field input[type=file] { font-size: 12px; width: 100%; }
+  .field.opt { opacity: .85; }
+  input[type=password] { width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+  .cache-box { border: 1px solid #bfdbfe; background: #f0f7ff; border-radius: 10px;
+    padding: 10px 12px; margin: 0 0 12px; font-size: 12px; color: #475569; }
+  .cache-title { font-weight: 700; color: #1d4ed8; margin-bottom: 6px; }
+  .cache-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+  .cache-table th, .cache-table td { border: 1px solid #dbeafe; padding: 4px 8px; text-align: left; }
+  .cache-table th { background: #e0efff; }
+  .cache-note { margin-top: 6px; color: #64748b; font-size: 12px; }
+  .cache-note.warn { color: #b45309; }
+  .hide { display: none; }
+  .table-wrap { max-height: 420px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { position: sticky; top: 0; background: #f1f5f9; z-index: 2; }
+  th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid #eef2f7; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.blue { background: #dbeafe; font-weight: 600; }
+  tfoot td { border-top: 2px solid #94a3b8; font-weight: 700; background: #fff; }
+  tfoot tr.grand td { background: #fef3c7; }
+  .reserved { border: 2px dashed #cbd5e1; border-radius: 14px; padding: 20px 22px; margin-top: 26px;
+    background: #fafbfd; color: #94a3b8; }
+  .reserved h3 { margin: 0 0 4px; font-size: 16px; color: #64748b; }
+  .reserved .fields { display: flex; gap: 12px; margin: 14px 0 4px; flex-wrap: wrap; }
+  .reserved input { padding: 8px 12px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #fff; color: #94a3b8; }
+  .quota-num.neg { color: #dc2626; }
+  .booking-card { margin-top: 16px; }
+  .book-form { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+  .book-file b { display: block; font-size: 12px; color: #475569; margin-bottom: 4px; font-weight: 600; }
+  .book-file input[type=file] { width: 340px; max-width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 13px; }
+  .result-box { margin-top: 14px; padding: 12px 14px; border: 1px solid #bfdbfe; background: #f0f7ff; border-radius: 10px; }
+  .result-box.err { border-color: #fecaca; background: #fef2f2; }
+  .res-row { font-size: 14px; line-height: 1.9; }
+  .res-total { margin-left: 18px; }
+  .miss-list { margin-top: 8px; color: #b45309; font-size: 12px; line-height: 1.7; }
+  .err-item { color: #b91c1c; font-size: 13px; line-height: 1.7; }
+  .overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(15,23,42,.55); display: none;
+    align-items: center; justify-content: center; z-index: 1000; }
+  .overlay.show { display: flex; }
+  .overlay .box { background: #fff; padding: 28px 40px; border-radius: 16px; text-align: center; }
+  .spinner { width: 44px; height: 44px; margin: 0 auto 14px; border: 5px solid #e2e8f0;
+    border-top-color: #2563eb; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { margin-top: 26px; color: #94a3b8; font-size: 12px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header class="hero">
+    <h1>大区发货可用额度</h1>
+    <p>俄罗斯 / 美洲　|　数据日期：{{ today.strftime('%Y-%m-%d') }}　|　上传数据或直接用缓存运行</p>
+  </header>
+
+  {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+  {% macro upload_panel(region) -%}
+  <div id="upload-{{ region.id }}" class="upload hidden">
+    <form method="post" action="{{ url_for('run') }}" enctype="multipart/form-data" onsubmit="return startBusy('run', this)">
+      <input type="hidden" name="region" value="{{ region.id }}">
+      <div class="cache-box">
+        <div class="cache-title">数据缓存：本次未重新上传的文件将沿用上次数据</div>
+        {% if region.has_cache %}
+        <table class="cache-table">
+          <tr><th>用途</th><th>文件名</th><th>上传日期</th></tr>
+          {% for f in region.fields %}
+          <tr><td>{{ f.label }}</td><td>{{ f.original or '（无）' }}</td><td>{{ f.uploaded_at or '（无记录）' }}</td></tr>
+          {% endfor %}
+        </table>
+        <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。</div>
+        {% else %}
+        <div class="cache-note warn">首次运行：需上传 表C / 表B / 表E / 表R 四个文件。</div>
+        {% endif %}
+      </div>
+      <div class="row">
+        {% for f in region.fields %}
+        <label class="field{% if f.optional %} opt{% endif %}">
+          <b>{{ f.label }}{% if not f.present and not f.optional %}（需上传）{% endif %}</b>
+          <input type="file" name="{{ f.slot }}" accept="{{ f.accept }}"{% if f.required %} required{% endif %}>
+        </label>
+        {% endfor %}
+        <label class="field"><b>更新密码</b><input type="password" name="password" placeholder="请输入密码" required></label>
+      </div>
+      <button class="btn primary" type="submit">开始运行（约 1~3 分钟）</button>
+      <button class="btn ghost" type="button" onclick="hide('upload-{{ region.id }}')">取消</button>
+    </form>
+  </div>
+  {%- endmacro %}
+
+  <div class="tabs">
+    {% for region in regions %}
+    <button type="button" class="tab{% if loop.first %} active{% endif %}" data-tab="{{ region.id }}" onclick="switchTab('{{ region.id }}')">{{ region.name }}</button>
+    {% endfor %}
+  </div>
+
+  {% for region in regions %}
+  <section id="tab-{{ region.id }}" class="tab-panel{% if loop.first %} active{% endif %}">
+    {% if not region.enabled %}
+    <div class="card disabled">
+      <div class="card-head"><h3>{{ region.name }}</h3><span class="chip reserve">预留位</span></div>
+      <p class="note">{{ region.note or '待配置' }}</p>
+      <div class="empty">此区域后续接入<br>（在 quota_regions.yaml 补齐配置后自动启用）</div>
+    </div>
+
+    {% else %}
+    <div class="card">
+      <div class="card-head">
+        <h3>{{ region.name }}</h3>
+        {% if region.result %}<span class="chip ok">已更新 {{ region.result.generated_at }}</span>
+        {% else %}<span class="chip wait">待上传数据</span>{% endif %}
+      </div>
+      <p class="note">{{ region.note or '' }}</p>
+
+      {% if region.result %}
+      {% set r = region.result %}
+      <div class="quota-box">
+        {% if region.booking and region.booking.ok and region.booking.balance_wan is not none %}
+        {% set b = region.booking %}
+        <div class="quota-stats">
+          <div class="quota-cell">
+            <div class="quota-label">发货可用额度</div>
+            <div class="quota-num">{{ r.grand | f2 }}<small> 万元</small></div>
+          </div>
+          <div class="quota-cell">
+            <div class="quota-label">本次发货总价</div>
+            <div class="quota-num">{{ b.total_wan | f2 }}<small> 万元</small></div>
+          </div>
+          <div class="quota-cell">
+            <div class="quota-label">余额</div>
+            <div class="quota-num{% if b.balance_wan < 0 %} neg{% endif %}">{{ b.balance_wan | f2 }}<small> 万元</small></div>
+          </div>
+        </div>
+        {% else %}
+        <div class="quota-label">发货可用额度</div>
+        <div class="quota-num">{{ r.grand | f2 }}<small> 万元</small></div>
+        {% endif %}
+      </div>
+      <div class="chips">
+        <div class="mini"><div class="k">已回款金额合计</div><div class="v">{{ r.sum2 | f2 }}</div></div>
+        <div class="mini"><div class="k">已发货合同金额合计</div><div class="v">{{ r.sum3 | f2 }}</div></div>
+        <div class="mini"><div class="k">净额（回款-发货）</div><div class="v">{{ r.net_total | f2 }}</div></div>
+        <div class="mini"><div class="k">固定额度</div><div class="v">{{ r.fixed | f2 }}</div></div>
+        <div class="mini"><div class="k">未确认回款</div><div class="v">{{ r.llc | f2 }}</div></div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" onclick="toggle('table-{{ region.id }}')">查看明细（{{ r.rows | length }} 个合同）</button>
+        <a class="btn ghost" href="{{ url_for('download', region_id=region.id) }}">下载 Excel</a>
+        <button class="btn primary" onclick="toggle('upload-{{ region.id }}')">更新数据</button>
+      </div>
+
+      <div id="table-{{ region.id }}" class="hidden">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>合同号</th><th class="num">已回款金额</th><th class="num">已发货合同金额</th><th class="num">可用额度</th></tr></thead>
+            <tbody>
+            {% for row in r.rows %}
+              <tr>
+                <td {% if row.has_a %}class="blue"{% endif %}>{{ row.contract }}</td>
+                <td class="num">{{ row.col2 | f2 }}</td>
+                <td class="num">{{ row.col3 | f2 }}</td>
+                <td class="num">{{ row.col4 | f2 }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr><td>合计</td><td class="num">{{ r.sum2 | f2 }}</td><td class="num">{{ r.sum3 | f2 }}</td><td class="num">{{ r.net_total | f2 }}</td></tr>
+              <tr><td>固定额度（{{ r.fixed | f2 }}万）</td><td></td><td></td><td class="num">{{ r.fixed | f2 }}</td></tr>
+              <tr><td>未确认回款</td><td></td><td></td><td class="num">{{ r.llc | f2 }}</td></tr>
+              <tr class="grand"><td>发货可用额度</td><td></td><td></td><td class="num">{{ r.grand | f2 }}</td></tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {{ upload_panel(region) }}
+
+      {% else %}
+      <div class="empty">
+        还没有数据。<br>
+        <button class="btn primary" style="margin-top:12px" onclick="toggle('upload-{{ region.id }}')">上传数据并运行</button>
+      </div>
+      {{ upload_panel(region) }}
+      {% endif %}
+    </div>
+
+    <div class="card booking-card">
+      <div class="card-head">
+        <h3>发货申请 · 上传 Excel 计算总价</h3>
+        {% if region.booking and region.booking.ok %}<span class="chip ok">已计算 {{ region.booking.calculated_at }}</span>
+        {% elif region.booking %}<span class="chip wait">未通过校验</span>{% endif %}
+      </div>
+      <p class="note">格式：A 列一行一个合同。① 只写合同号＝该合同全部梯号；② 合同号后列固定梯号（如 58# 60# 62#）；③ 连续区间用 1#-23#。金额从该大区表C J 列（合同额·人民币）取，自动套用区域过滤；重叠申请会拒绝计算。</p>
+      <form class="book-form" method="post" action="{{ url_for('booking') }}" enctype="multipart/form-data" onsubmit="return startBusy('booking', this)">
+        <input type="hidden" name="region" value="{{ region.id }}">
+        <label class="book-file">
+          <b>订舱发货 Excel（.xlsx）</b>
+          <input type="file" name="booking_file" accept=".xlsx" required>
+        </label>
+        <button class="btn primary" type="submit">计算总价</button>
+      </form>
+
+      {% if region.booking %}
+      {% set b = region.booking %}
+      {% if b.ok %}
+      <div class="result-box">
+        <div class="res-row"><span>文件：{{ b.uploaded_name }}</span><span class="res-total">共 {{ b.lines | length }} 条申请 / 命中 {{ b.count }} 个梯</span></div>
+        {% if b.missing %}
+        <div class="miss-list">
+          {% for m in b.missing %}第{{ m.line }}行 · {{ m.contract }}（{{ m.spec }}）：{{ m.message }}<br>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>行</th><th>合同号</th><th>梯号规格</th><th class="num">梯数</th><th class="num">金额小计（元）</th></tr></thead>
+          <tbody>
+          {% for lt in b.line_totals %}
+            <tr><td>{{ lt.line }}</td><td>{{ lt.contract }}</td><td>{{ lt.spec }}</td><td class="num">{{ lt.count }}</td><td class="num">{{ lt.total_rmb | f2 }}</td></tr>
+          {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr class="grand"><td>合计</td><td></td><td></td><td class="num">{{ b.count }}</td><td class="num">{{ b.total_rmb | f2 }}</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        {% if not b.save_error %}
+        <a class="btn ghost" href="{{ url_for('booking_download', region_id=region.id) }}">下载明细 Excel（{{ b.details | length }} 行）</a>
+        {% endif %}
+        <button class="btn ghost" onclick="toggle('book-detail-{{ region.id }}')">查看逐梯明细（{{ b.details | length }} 行）</button>
+      </div>
+      {% if b.save_error %}
+      <div class="err-item" style="margin-top:6px">明细 Excel 保存失败：{{ b.save_error }}</div>
+      {% endif %}
+      <div id="book-detail-{{ region.id }}" class="hidden">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>行</th><th>合同号</th><th>标的编号</th><th class="num">金额（元）</th><th>备注</th></tr></thead>
+            <tbody>
+            {% for d in b.details %}
+              <tr><td>{{ d.line }}</td><td>{{ d.contract }}</td><td>{{ d.bid }}</td><td class="num">{{ d.amount | f2 }}</td><td>{{ d.marker }}</td></tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="result-box err">
+        <div class="res-row">本次未通过校验：</div>
+        {% for e in b.errors %}<div class="err-item">· {{ e }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <footer>
+    说明：已回款金额 = 表B+表E抵佣金+表R 三表按合同汇总（万元）；已发货合同金额 = 组A有日期梯的表C J 列合计（万元）；
+    可用额度 = 已回款金额 − 已发货合同金额；发货可用额度 = Σ可用额度 + 固定额度 + 未确认回款(ASTRO-LIFT 2026年起无合同号)。
+    首列浅蓝 = 该合同存在已发货(组A)梯。上传缓存仅在运行成功时更新，失败保留上一次数据。
+  </footer>
+</div>
+
+<div id="loading" class="overlay">
+  <div class="box">
+    <div class="spinner"></div>
+    <div id="loading-title" style="font-weight:600">正在处理…</div>
+    <div id="loading-est" style="color:#94a3b8;font-size:13px;margin-top:6px">请稍候，不要关闭页面</div>
+    <div id="loading-elapsed" style="color:#64748b;font-size:13px;margin-top:6px">已等待 0 秒</div>
+  </div>
+</div>
+
+<script>
+function toggle(id){ var el=document.getElementById(id); if(el) el.classList.toggle('hidden'); }
+function hide(id){ var el=document.getElementById(id); if(el) el.classList.add('hidden'); }
+function startBusy(kind, form){
+  if (!window.fetch || !window.FormData) { return true; }  // 旧浏览器回退为原生整页提交
+  var overlay = document.getElementById('loading');
+  var title = document.getElementById('loading-title');
+  var est = document.getElementById('loading-est');
+  var elapsedEl = document.getElementById('loading-elapsed');
+  var seconds = 0;
+  if (kind === 'run') {
+    title.textContent = '正在更新额度…';
+    est.textContent = '预计 1~3 分钟（读取 4 张台账，文件较大）';
+  } else {
+    title.textContent = '正在计算总价…';
+    est.textContent = '预计约 1 分钟（需读取表C台账）';
+  }
+  overlay.classList.add('show');
+  elapsedEl.textContent = '已等待 0 秒';
+  if (window.__busyTimer) { window.clearInterval(window.__busyTimer); }
+  window.__busyTimer = window.setInterval(function(){
+    seconds++;
+    elapsedEl.textContent = '已等待 ' + seconds + ' 秒';
+    if (seconds >= 180) { est.textContent = '处理时间较长，通常为大表读取，请勿关闭页面'; }
+  }, 1000);
+  var btn = form.querySelector('button[type=submit]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = (kind === 'run') ? '运行中…' : '计算中…';
+  }
+  var action = form.getAttribute('action') || form.action;
+  fetch(action, { method: 'POST', body: new FormData(form) })
+    .then(function(resp){
+      if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+      return resp.text();
+    })
+    .then(function(html){
+      if (window.__busyTimer) { window.clearInterval(window.__busyTimer); window.__busyTimer = null; }
+      document.open();
+      document.write(html);
+      document.close();
+      try { history.replaceState(null, '', '/' + (location.hash || '')); } catch (e) {}
+    })
+    .catch(function(err){
+      if (window.__busyTimer) { window.clearInterval(window.__busyTimer); window.__busyTimer = null; }
+      overlay.classList.remove('show');
+      if (btn) { btn.disabled = false; btn.textContent = (kind === 'run') ? '重新运行' : '重新计算'; }
+      alert('请求失败：' + ((err && err.message) || err) + '，请重试');
+    });
+  return false;
+}
+function setActiveTab(id){
+  var tabs = document.getElementsByClassName('tab');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].getAttribute('data-tab') === id) { tabs[i].classList.add('active'); }
+    else { tabs[i].classList.remove('active'); }
+  }
+  var panels = document.getElementsByClassName('tab-panel');
+  for (var j = 0; j < panels.length; j++) {
+    if (panels[j].id === 'tab-' + id) { panels[j].classList.add('active'); }
+    else { panels[j].classList.remove('active'); }
+  }
+}
+function switchTab(id){
+  setActiveTab(id);
+  try { history.replaceState(null, '', '#' + id); } catch (e) { location.hash = id; }
+}
+(function(){
+  var id = (location.hash || '').replace('#', '');
+  if (id && document.getElementById('tab-' + id)) { setActiveTab(id); }
+  try {
+    var u = new URL(window.location.href);
+    if (u.searchParams && u.searchParams.has('msg')) {
+      u.searchParams.delete('msg');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
