@@ -1,0 +1,21 @@
+# 运行时产物（服务器上自动生成，不入库）
+workspaces/
+*.log
+nohup.out
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Excel 临时/锁定文件
+~$*.xlsx
+~$*.xls
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

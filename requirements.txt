@@ -1,0 +1,6 @@
+flask
+pandas
+openpyxl
+xlrd
+pyyaml
+waitress
