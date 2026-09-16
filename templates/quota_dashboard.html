@@ -66,6 +66,14 @@
   .field input[type=file] { font-size: 12px; width: 100%; }
   .field.opt { opacity: .85; }
   input[type=password] { width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+  .field .hint { display: block; font-size: 11px; color: #94a3b8; margin-top: 4px; line-height: 1.45; }
+  .btn.sm { padding: 7px 14px; font-size: 13px; }
+  /* 订舱清单免密码入口：独立成块，位于上传框下方 */
+  .booking-run { display: flex; flex-direction: column; gap: 8px; }
+  .booking-run .bk-title { font-size: 12px; font-weight: 600; color: #475569; }
+  .booking-run .bk-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .booking-run input[type=file] { flex: 0 1 360px; min-width: 0; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 13px; }
+  .booking-run .hint { font-size: 11px; color: #94a3b8; line-height: 1.45; }
   .cache-box { border: 1px solid #bfdbfe; background: #f0f7ff; border-radius: 10px;
     padding: 10px 12px; margin: 0 0 12px; font-size: 12px; color: #475569; }
   .cache-title { font-weight: 700; color: #1d4ed8; margin-bottom: 6px; }
@@ -198,6 +206,55 @@
       </div>
       <button class="btn primary" type="submit">开始运行（约 1~3 分钟）</button>
       <button class="btn ghost" type="button" onclick="hide('upload-{{ region.id }}')">取消</button>
+    </form>
+  </div>
+  {%- endmacro %}
+
+  {# 墨西哥专用上传面板：订舱清单免密码、单独成块放在上传框下方（其他大区走上面的 upload_panel，不受影响） #}
+  {% macro upload_panel_mexico(region) -%}
+  <div id="upload-{{ region.id }}" class="upload-wrap hidden">
+    <div class="upload">
+    <form method="post" action="{{ url_for('run') }}" enctype="multipart/form-data" onsubmit="return startBusy('run', this)">
+      <input type="hidden" name="region" value="{{ region.id }}">
+      <div class="cache-box">
+        <div class="cache-title">数据缓存：本次未重新上传的文件将沿用上次数据</div>
+        {% if region.has_cache %}
+        <table class="cache-table">
+          <tr><th>用途</th><th class="col-file">文件名</th><th class="col-date">上传日期</th></tr>
+          {% for f in region.fields %}
+          <tr><td>{{ f.label }}</td><td class="col-file">{{ f.original or '（无）' }}</td><td class="col-date">{{ f.uploaded_at or '（无记录）' }}</td></tr>
+          {% endfor %}
+        </table>
+        <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。订舱清单可用下方「开始运算」免密码单独更新。</div>
+        {% else %}
+        <div class="cache-note warn">首次运行：需上传 表C / 表B / 表E / 表R / 订舱清单 / 预算成本帐 六个文件（汇率可选）。</div>
+        {% endif %}
+      </div>
+      <div class="row">
+        {% for f in region.fields %}
+        {% if f.slot != 'mexico_booking' %}
+        <label class="field{% if f.optional %} opt{% endif %}">
+          <b>{{ f.label }}{% if not f.present and not f.optional %}（需上传）{% endif %}</b>
+          <input type="file" name="{{ f.slot }}" accept="{{ f.accept }}"{% if f.required %} required{% endif %}>
+        </label>
+        {% endif %}
+        {% endfor %}
+        <label class="field"><b>更新密码</b><input type="password" name="password" placeholder="请输入密码" required><span class="hint">订舱清单可用下方「开始运算」免密码更新，其余文件需要密码</span></label>
+      </div>
+      <button class="btn primary" type="submit">开始运行（约 1~3 分钟）</button>
+      <button class="btn ghost" type="button" onclick="hide('upload-{{ region.id }}')">取消</button>
+    </form>
+    </div>
+    <div class="upload booking-run">
+      <b class="bk-title">订舱清单 · 墨西哥已订舱未组A合同号 (.xlsx)</b>
+      <div class="bk-row">
+        <input type="file" name="mexico_booking" accept=".xlsx" form="mx-run-{{ region.id }}">
+        <button class="btn primary sm" type="submit" form="mx-run-{{ region.id }}" onclick="return startBusy('run', document.getElementById('mx-run-{{ region.id }}'), this)">开始运算</button>
+      </div>
+      <span class="hint">免密码：选好文件点「开始运算」；不选文件则用缓存重算。表C / 表B / 表E / 表R、预算成本帐、汇率文件仍需密码。</span>
+    </div>
+    <form id="mx-run-{{ region.id }}" method="post" action="{{ url_for('run_booking') }}" enctype="multipart/form-data">
+      <input type="hidden" name="region" value="{{ region.id }}">
     </form>
   </div>
   {%- endmacro %}
@@ -344,14 +401,14 @@
         </div>
         <p class="note detail-note">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
       </div>
-      {{ upload_panel(region) }}
+      {{ upload_panel_mexico(region) }}
 
       {% else %}
       <div class="empty">
         还没有数据。<br>
         <button class="btn primary" style="margin-top:12px" onclick="toggle('upload-{{ region.id }}')">上传数据并运行</button>
       </div>
-      {{ upload_panel(region) }}
+      {{ upload_panel_mexico(region) }}
       {% endif %}
     </div>
     {% else %}
@@ -576,7 +633,7 @@
 <script>
 function toggle(id){ var el=document.getElementById(id); if(el) el.classList.toggle('hidden'); }
 function hide(id){ var el=document.getElementById(id); if(el) el.classList.add('hidden'); }
-function startBusy(kind, form){
+function startBusy(kind, form, btnEl){
   if (!window.fetch || !window.FormData) { return true; }  // 旧浏览器回退为原生整页提交
   var overlay = document.getElementById('loading');
   var title = document.getElementById('loading-title');
@@ -601,7 +658,7 @@ function startBusy(kind, form){
     elapsedEl.textContent = '已等待 ' + seconds + ' 秒';
     if (seconds >= 180) { est.textContent = '处理时间较长，通常为大表读取，请勿关闭页面'; }
   }, 1000);
-  var btn = form.querySelector('button[type=submit]');
+  var btn = btnEl || form.querySelector('button[type=submit]');
   if (btn) {
     btn.disabled = true;
     btn.textContent = (kind === 'run') ? '运行中…' : (kind === 'loan' ? '更新中…' : '计算中…');

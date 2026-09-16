@@ -352,6 +352,11 @@ def booking_download(region_id):
 
 @app.route("/run", methods=["POST"])
 def run():
+    """运行某大区。同一视图服务两个入口：
+    /run          上传全部文件，必须密码；
+    /run_booking  墨西哥订舱清单免密码入口（只接受订舱清单，其余文件一律沿用缓存）。
+    """
+    booking_only = (request.endpoint == "run_booking")
     regions = load_regions()
     region_id = request.form.get("region", "")
     region = next((r for r in regions if r["id"] == region_id and r.get("enabled")), None)
@@ -361,7 +366,10 @@ def run():
 
     if region is None:
         return back("无效或未启用的区域")
-    if request.form.get("password", "") != UPLOAD_PASSWORD:
+    if booking_only:
+        if region.get("kind") != "mexico":
+            return back("该入口仅墨西哥大区可用")
+    elif request.form.get("password", "") != UPLOAD_PASSWORD:
         return back("密码错误")
 
     cfg = load_main_config()
@@ -441,12 +449,13 @@ def run():
     for slot in region_slots(region):
         if slot == "exchange_rate":
             continue
-        fs = request.files.get(slot)
+        # 免密码入口只认订舱清单：即使被构造请求，其余槽位也不替换，一律沿用缓存
+        fs = request.files.get(slot) if (not booking_only or slot == "mexico_booking") else None
         file_obj = fs if fs and fs.filename else None
         if not prepare_slot(slot, file_obj):
             missing.append(SLOT_ATTRS[slot]["label"])
 
-    ex = request.files.get("exchange_rate")
+    ex = request.files.get("exchange_rate") if not booking_only else None
     ex_file = ex if ex and ex.filename else None
     if not prepare_slot("exchange_rate", ex_file):
         default_ex = os.path.join(BASE_DIR, "数据源", cfg["paths"]["exchange_rate"])
@@ -462,6 +471,9 @@ def run():
         kept = keep_uploaded_files()
         shutil.rmtree(stage, ignore_errors=True)
         kept_note = ("；本次已上传的 %d 个文件已保存为缓存，下次只需补上传缺失的文件" % kept) if kept else ""
+        if booking_only:
+            return back("还不能运算：缺少 " + "、".join(missing) +
+                        "（无缓存）。请先用密码在「更新数据」里上传这些文件。" + kept_note)
         return back("缺少文件：" + "、".join(missing) + "（无缓存，必须上传）" + kept_note)
 
     try:
@@ -559,6 +571,12 @@ def run():
     return redirect(url_for("index",
                             msg="运行完成，已更新「" + display_name(region) + "」",
                             _anchor=region_id))
+
+
+@app.route("/run_booking", methods=["POST"])
+def run_booking():
+    """墨西哥订舱清单免密码入口：复用 /run 的完整流程（暂存、缺文件校验、失败保留、成功后整体替换）。"""
+    return run()
 
 
 @app.route("/loan", methods=["POST"])
