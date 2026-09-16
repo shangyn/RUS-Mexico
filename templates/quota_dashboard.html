@@ -88,6 +88,13 @@
   tfoot td { border-top: 2px solid #94a3b8; font-weight: 700; background: #fff; }
   tfoot tr.grand td { background: #fef3c7; }
   td.num.neg { color: #dc2626; font-weight: 700; }
+  /* 墨西哥明细表专用：更紧凑 + 表头两行 + 数值居中（作用域 .mx-detail，不影响俄罗斯） */
+  .mx-detail table { font-size: 12.5px; }
+  .mx-detail th, .mx-detail td { padding: 3px 6px; line-height: 1.35; }
+  .mx-detail thead th { text-align: center; vertical-align: middle; padding: 7px 6px; }
+  .mx-detail thead th .u { display: block; font-size: 11px; font-weight: 400; color: #64748b; }
+  .mx-detail tbody td.num, .mx-detail tfoot td.num { text-align: center; }
+  .mx-detail .detail-note { margin: 10px 0 0; line-height: 1.7; }
   .reserved { border: 2px dashed #cbd5e1; border-radius: 14px; padding: 20px 22px; margin-top: 26px;
     background: #fafbfd; color: #94a3b8; }
   .reserved h3 { margin: 0 0 4px; font-size: 16px; color: #64748b; }
@@ -258,25 +265,24 @@
       </details>
       {% endif %}
 
-      <div id="table-{{ region.id }}" class="hidden">
-        <p class="note" style="margin-top:10px">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
+      <div id="table-{{ region.id }}" class="hidden mx-detail">
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>合同号 / 梯号</th>
-              <th class="num">合同额（万美元）</th>
-              <th class="num">已回款金额（万美元）</th>
-              <th class="num">已组A金额（万美元）</th>
-              <th class="num">已组A海运费（万美元）</th>
-              <th class="num">已组A设备（万美元）</th>
-              <th class="num">已订舱未组A金额（万美元）</th>
-              <th class="num">已订舱未组A海运费（万美元）</th>
-              <th class="num">已订舱未组A设备（万美元）</th>
-              <th class="num">设备欠款（万美元）</th>
-              <th class="num">海运费欠款（万美元）</th>
-              <th class="num">汇率</th>
-              <th class="num">设备欠款人民币（万元）</th>
-              <th class="num">海运费欠款人民币（万元）</th>
+              <th>合同号<span class="u">/ 梯号</span></th>
+              <th class="num">合同额<span class="u">（万美元）</span></th>
+              <th class="num">已回款金额<span class="u">（万美元）</span></th>
+              <th class="num">已组A金额<span class="u">（万美元）</span></th>
+              <th class="num">已组A海运费<span class="u">（万美元）</span></th>
+              <th class="num">已组A设备<span class="u">（万美元）</span></th>
+              <th class="num">已订舱未组A金额<span class="u">（万美元）</span></th>
+              <th class="num">已订舱未组A海运费<span class="u">（万美元）</span></th>
+              <th class="num">已订舱未组A设备<span class="u">（万美元）</span></th>
+              <th class="num">设备欠款<span class="u">（万美元）</span></th>
+              <th class="num">海运费欠款<span class="u">（万美元）</span></th>
+              <th class="num">汇率<span class="u">&nbsp;</span></th>
+              <th class="num">设备欠款人民币<span class="u">（万元）</span></th>
+              <th class="num">海运费欠款人民币<span class="u">（万元）</span></th>
             </tr></thead>
             <tbody>
             {% for b in r.blocks %}
@@ -336,6 +342,7 @@
             </tfoot>
           </table>
         </div>
+        <p class="note detail-note">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
       </div>
       {{ upload_panel(region) }}
 
