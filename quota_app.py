@@ -24,6 +24,7 @@ from flask import Flask, render_template, request, send_file, abort, redirect, u
 
 from quota_core import (compute_region, compute_booking, load_main_config, find_file,
                        save_booking_result, merge_booking_into_rows, write_region_excel)
+from quota_core import compute_mexico
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.join(BASE_DIR, "workspaces", "quota")
@@ -36,19 +37,34 @@ app.jinja_env.filters['f2'] = lambda x: f'{x:,.2f}'
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512MB 上限
 
 UPLOAD_KEYS = ["table_c", "table_b", "table_e", "table_r"]
+# 墨西哥：同样四张台账 + 订舱清单 + 预算成本帐（海运费）
+MEXICO_KEYS = UPLOAD_KEYS + ["mexico_booking", "budget_cost"]
 ALL_SLOTS = UPLOAD_KEYS + ["exchange_rate"]
 SLOT_ATTRS = {
     "table_c":       {"label": "表C · 国贸合同标的台账 (.xlsx)", "accept": ".xlsx", "optional": False},
     "table_b":       {"label": "表B · 外币回款台账 (.xlsx)",     "accept": ".xlsx", "optional": False},
     "table_e":       {"label": "表E · gm_ht_hthkmx (.xls/.xlsx)", "accept": ".xls,.xlsx", "optional": False},
     "table_r":       {"label": "表R · 人民币回款台账 (.xlsx)",   "accept": ".xlsx", "optional": False},
+    "mexico_booking": {"label": "订舱清单 · 墨西哥已订舱未组A合同号 (.xlsx)", "accept": ".xlsx", "optional": False},
+    "budget_cost":   {"label": "预算成本帐 · 预计海运费 (.xlsx)",  "accept": ".xlsx", "optional": False},
     "exchange_rate": {"label": "汇率文件（可选）",               "accept": ".txt", "optional": True},
 }
+
+
+def region_slots(region):
+    """该大区需要上传/缓存的文件槽位（顺序即页面展示顺序）。"""
+    keys = MEXICO_KEYS if region.get("kind") == "mexico" else UPLOAD_KEYS
+    return list(keys) + ["exchange_rate"]
 
 
 def load_regions():
     with open(os.path.join(BASE_DIR, "quota_regions.yaml"), "r", encoding="utf-8") as f:
         return yaml.safe_load(f)["regions"]
+
+
+def display_name(region):
+    """界面显示名：统一去掉「大区」后缀（tab / 卡片标题 / 提示语保持一致）"""
+    return (region.get("name") or region.get("id") or "").replace("大区", "")
 
 
 def region_dirs(region_id):
@@ -127,7 +143,7 @@ def cached_path(region_id, slot):
 def build_cache_fields(region):
     meta = load_cache_meta(region["id"])
     fields = []
-    for slot in ALL_SLOTS:
+    for slot in region_slots(region):
         attrs = SLOT_ATTRS[slot]
         path = cached_path(region["id"], slot)
         present = path is not None
@@ -274,6 +290,8 @@ def booking():
 
     if target is None:
         return render_page(view, "无效或未启用的区域")
+    if target.get("kind") == "mexico":
+        return render_page(view, "墨西哥大区不使用「发货申请」功能（订舱清单在「更新数据」里上传）")
     fs = request.files.get("booking_file")
     if fs is None or not fs.filename:
         return set_error("请先选择订舱发货 Excel 文件")
@@ -296,7 +314,7 @@ def booking():
                 grand = float(target["result"]["grand"])
             res["grand_wan"] = grand
             res["balance_wan"] = round(grand - res["total_wan"], 4) if grand is not None else None
-            res["region_name"] = target.get("name") or region_id
+            res["region_name"] = display_name(target) or region_id
             out_dir = region_dirs(region_id)["out"]
             try:
                 # 联动：把本次申请并入大区「下载 Excel」（预发货金额 + 余额）
@@ -373,6 +391,7 @@ def run():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     meta_new = {}
     missing = []
+    uploaded_slots = []          # 本次新上传的槽位（运行失败时也要保留，避免重试重新上传）
 
     def prepare_slot(slot, file_storage):
         """把本次要用的文件放入暂存目录：新上传优先，其次沿用缓存。
@@ -382,6 +401,7 @@ def run():
         if file_storage is not None:
             file_storage.save(target)
             meta_new[slot] = {"original": file_storage.filename, "uploaded_at": now_str}
+            uploaded_slots.append(slot)
             return True
         if present_cache:
             shutil.copy2(present_cache, target)
@@ -393,7 +413,34 @@ def run():
             return True
         return False
 
-    for slot in UPLOAD_KEYS:
+    def keep_uploaded_files():
+        """运行失败时保留本次上传的文件：写入正式数据目录并更新缓存日期。
+        只覆盖本次新上传的槽位，输出目录与其余缓存一律不动，
+        这样修正后重跑无需重新上传，也不用重新等待表C读取。"""
+        if not uploaded_slots:
+            return 0
+        os.makedirs(final_data, exist_ok=True)
+        kept = 0
+        for slot in uploaded_slots:
+            name = cfg["paths"].get(slot)
+            if not name:
+                continue
+            src = os.path.join(stage_data, name)
+            if not os.path.isfile(src):
+                continue
+            try:
+                shutil.copy2(src, os.path.join(final_data, name))
+            except OSError:
+                continue      # 单个文件被占用也不影响其他文件
+            kept += 1
+        meta = dict(meta_old)
+        meta.update({s: meta_new[s] for s in uploaded_slots if s in meta_new})
+        save_cache_meta(region_id, meta)
+        return kept
+
+    for slot in region_slots(region):
+        if slot == "exchange_rate":
+            continue
         fs = request.files.get(slot)
         file_obj = fs if fs and fs.filename else None
         if not prepare_slot(slot, file_obj):
@@ -412,14 +459,22 @@ def run():
             }
 
     if missing:
+        kept = keep_uploaded_files()
         shutil.rmtree(stage, ignore_errors=True)
-        return back("缺少文件：" + "、".join(missing) + "（无缓存，必须上传）")
+        kept_note = ("；本次已上传的 %d 个文件已保存为缓存，下次只需补上传缺失的文件" % kept) if kept else ""
+        return back("缺少文件：" + "、".join(missing) + "（无缓存，必须上传）" + kept_note)
 
     try:
-        compute_region(region, stage_data, stage_out)
+        if region.get("kind") == "mexico":
+            compute_mexico(region, stage_data, stage_out)
+        else:
+            compute_region(region, stage_data, stage_out)
     except Exception as e:
+        kept = keep_uploaded_files()
         shutil.rmtree(stage, ignore_errors=True)
-        return back("计算失败：" + str(e))
+        kept_note = ("；本次上传的 %d 个文件已保存为缓存，修正后可直接重跑，无需重新上传"
+                     "（上次的计算结果与下载文件不受影响）") % kept if kept else ""
+        return back("计算失败：" + str(e) + kept_note)
 
     # 计算成功后才提交：整目录原子替换。
     # 正式目录内任一文件被 Excel 等占用（未以共享删除方式打开）时目录无法整体改名，
@@ -462,17 +517,21 @@ def run():
         _probe_replaceable(final_data)
         _probe_replaceable(final_out)
     except OSError as e:
+        kept = keep_uploaded_files()
         shutil.rmtree(stage, ignore_errors=True)
+        kept_note = ("；本次上传的 %d 个文件已保存为缓存，关闭占用后可直接重跑" % kept) if kept else ""
         return back("保存失败：" + str(e) +
                     "（目录内文件正被其他程序占用，通常是 Excel 打开了旧数据/输出文件；"
-                    "请关闭后重试。本次运行未改动原数据）")
+                    "请关闭后重试。本次运行未改动原数据）" + kept_note)
 
     try:
         commit_dir(stage_data, final_data)
         commit_dir(stage_out, final_out)
     except Exception as e:
+        kept = keep_uploaded_files()
         shutil.rmtree(stage, ignore_errors=True)
-        return back("保存失败：" + str(e) + "（文件正被占用，请关闭相关程序后重试）")
+        kept_note = ("；本次上传的 %d 个文件已保存为缓存，关闭占用后可直接重跑" % kept) if kept else ""
+        return back("保存失败：" + str(e) + "（文件正被占用，请关闭相关程序后重试）" + kept_note)
 
     if os.path.isdir(stage):
         shutil.rmtree(stage, ignore_errors=True)
@@ -490,14 +549,16 @@ def run():
                 if isinstance(grand, (int, float)) and isinstance(booking.get("total_wan"), (int, float)):
                     booking["grand_wan"] = float(grand)
                     booking["balance_wan"] = round(float(grand) - float(booking["total_wan"]), 4)
-                booking["region_name"] = region.get("name")
+                booking["region_name"] = display_name(region)
                 save_booking_result(booking, region, final_out)
                 write_region_excel(region, result, booking, final_out,
                                    loan=load_loan(region_id)["amount"])
         except Exception as e:
             print("重算后联动发货申请失败（可忽略）：", e)
 
-    return redirect(url_for("index", msg="运行完成，已更新「" + region["name"] + "」", _anchor=region_id))
+    return redirect(url_for("index",
+                            msg="运行完成，已更新「" + display_name(region) + "」",
+                            _anchor=region_id))
 
 
 @app.route("/loan", methods=["POST"])
@@ -512,6 +573,8 @@ def loan():
 
     if region is None:
         return back("无效或未启用的区域")
+    if region.get("kind") == "mexico":
+        return back("墨西哥大区不使用「借款额」功能")
     if request.form.get("password", "") != UPLOAD_PASSWORD:
         return back("密码错误")
 

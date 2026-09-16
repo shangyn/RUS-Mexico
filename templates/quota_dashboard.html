@@ -81,6 +81,10 @@
   th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid #eef2f7; white-space: nowrap; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.blue { background: #dbeafe; font-weight: 600; }
+  td.ga { background: #ddebf7; }
+  td.bk { background: #fff2cc; }
+  tr.mx-contract td { background: #e7e6e6; font-weight: 700; }
+  tr.mx-total td { background: #fce4d6; }
   tfoot td { border-top: 2px solid #94a3b8; font-weight: 700; background: #fff; }
   tfoot tr.grand td { background: #fef3c7; }
   td.num.neg { color: #dc2626; font-weight: 700; }
@@ -153,7 +157,7 @@
 
   <header class="hero">
     <h1>大区发货可用额度</h1>
-    <p>俄罗斯 / 美洲　|　数据日期：{{ today.strftime('%Y-%m-%d') }}　|　上传数据或用缓存运行</p>
+    <p>俄罗斯 / 墨西哥　|　数据日期：{{ today.strftime('%Y-%m-%d') }}　|　上传数据或用缓存运行</p>
   </header>
 
   {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
@@ -173,7 +177,7 @@
         </table>
         <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。</div>
         {% else %}
-        <div class="cache-note warn">首次运行：需上传 表C / 表B / 表E / 表R 四个文件。</div>
+        <div class="cache-note warn">{% if region.kind == 'mexico' %}首次运行：需上传 表C / 表B / 表E / 表R / 订舱清单 / 预算成本帐 六个文件（汇率可选）。{% else %}首次运行：需上传 表C / 表B / 表E / 表R 四个文件。{% endif %}</div>
         {% endif %}
       </div>
       <div class="row">
@@ -192,8 +196,8 @@
   {%- endmacro %}
 
   <div class="tabs">
-    {% for region in regions %}
-    <button type="button" class="tab{% if loop.first %} active{% endif %}" data-tab="{{ region.id }}" onclick="switchTab('{{ region.id }}')">{{ region.name }}</button>
+    {% for region in regions if region.enabled %}
+    <button type="button" class="tab{% if loop.first %} active{% endif %}" data-tab="{{ region.id }}" onclick="switchTab('{{ region.id }}')">{{ region.name | replace('大区', '') }}</button>
     {% endfor %}
   </div>
 
@@ -201,15 +205,152 @@
   <section id="tab-{{ region.id }}" class="tab-panel{% if loop.first %} active{% endif %}">
     {% if not region.enabled %}
     <div class="card disabled">
-      <div class="card-head"><h3>{{ region.name }}</h3><span class="chip reserve">预留位</span></div>
+      <div class="card-head"><h3>{{ region.name | replace('大区', '') }}</h3><span class="chip reserve">预留位</span></div>
       <p class="note">{{ region.note or '待配置' }}</p>
       <div class="empty">此区域后续接入<br>（在 quota_regions.yaml 补齐配置后自动启用）</div>
     </div>
 
     {% else %}
+    {% if region.kind == 'mexico' %}
     <div class="card">
       <div class="card-head">
-        <h3>{{ region.name }}</h3>
+        <h3>{{ region.name | replace('大区', '') }}</h3>
+        {% if region.result %}<span class="chip ok">已更新 {{ region.result.generated_at }}</span>
+        {% else %}<span class="chip wait">待上传数据</span>{% endif %}
+      </div>
+
+      {% if region.result %}
+      {% set r = region.result %}
+      <div class="quota-box">
+        <div class="quota-stats">
+          <div class="quota-cell">
+            <div class="quota-label">设备欠款金额合计（万美元）</div>
+            <div class="quota-num">{{ r.totals.J | f2 }}<small> 万美元</small></div>
+          </div>
+          <div class="quota-cell">
+            <div class="quota-label">海运费欠款金额合计（万美元）</div>
+            <div class="quota-num">{{ r.totals.K | f2 }}<small> 万美元</small></div>
+          </div>
+          <div class="quota-cell">
+            <div class="quota-label">欠款折人民币合计</div>
+            <div class="quota-num">{{ (r.totals.M + r.totals.N) | f2 }}<small> 万元</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="chips">
+        <div class="mini"><div class="k">合同额合计（万美元）</div><div class="v">{{ r.totals.B | f2 }}</div></div>
+        <div class="mini"><div class="k">已回款合计（万美元）</div><div class="v">{{ r.totals.C | f2 }}</div></div>
+        <div class="mini"><div class="k">已组A设备（万美元）</div><div class="v">{{ r.totals.F | f2 }}</div></div>
+        <div class="mini"><div class="k">已订舱未组A设备（万美元）</div><div class="v">{{ r.totals.I | f2 }}</div></div>
+        <div class="mini"><div class="k">设备欠款折人民币（万元）</div><div class="v">{{ r.totals.M | f2 }}</div></div>
+        <div class="mini"><div class="k">海运费欠款折人民币（万元）</div><div class="v">{{ r.totals.N | f2 }}</div></div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" onclick="toggle('table-{{ region.id }}')">查看明细（{{ r.count_contracts }} 个合同 / 共 {{ r.count_contracts + r.count_details }} 行）</button>
+        <a class="btn ghost" href="{{ url_for('download', region_id=region.id) }}">下载 Excel</a>
+        <button class="btn primary" onclick="toggle('upload-{{ region.id }}')">更新数据</button>
+      </div>
+
+      {% if r.warnings %}
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;color:#b45309;font-size:13px">计算提示（{{ r.warnings | length }} 条）</summary>
+        <div class="miss-list">{% for w in r.warnings %}{{ w }}<br>{% endfor %}</div>
+      </details>
+      {% endif %}
+
+      <div id="table-{{ region.id }}" class="hidden">
+        <p class="note" style="margin-top:10px">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>合同号 / 梯号</th>
+              <th class="num">合同额（万美元）</th>
+              <th class="num">已回款金额（万美元）</th>
+              <th class="num">已组A金额（万美元）</th>
+              <th class="num">已组A海运费（万美元）</th>
+              <th class="num">已组A设备（万美元）</th>
+              <th class="num">已订舱未组A金额（万美元）</th>
+              <th class="num">已订舱未组A海运费（万美元）</th>
+              <th class="num">已订舱未组A设备（万美元）</th>
+              <th class="num">设备欠款（万美元）</th>
+              <th class="num">海运费欠款（万美元）</th>
+              <th class="num">汇率</th>
+              <th class="num">设备欠款人民币（万元）</th>
+              <th class="num">海运费欠款人民币（万元）</th>
+            </tr></thead>
+            <tbody>
+            {% for b in r.blocks %}
+              <tr class="mx-contract">
+                <td>{{ b.contract }}</td>
+                <td class="num">{{ b.B | f2 }}</td>
+                <td class="num">{{ b.C | f2 }}</td>
+                <td class="num">{{ b.D | f2 }}</td>
+                <td class="num">{{ b.E | f2 }}</td>
+                <td class="num">{{ b.F | f2 }}</td>
+                <td class="num">{{ b.G | f2 }}</td>
+                <td class="num">{{ b.H | f2 }}</td>
+                <td class="num">{{ b.I | f2 }}</td>
+                <td class="num">{{ b.J | f2 }}</td>
+                <td class="num">{{ b.K | f2 }}</td>
+                <td class="num">{{ b.L }}</td>
+                <td class="num">{{ b.M | f2 }}</td>
+                <td class="num">{{ b.N | f2 }}</td>
+              </tr>
+              {% for d in b.details %}
+              <tr>
+                <td>&emsp;{{ d.ladder }}#</td>
+                {% if d.group == 'ga' %}
+                <td></td><td></td>
+                <td class="num ga">{{ d.amount | f2 }}</td>
+                <td class="num ga">{{ d.freight | f2 }}</td>
+                <td class="num ga">{{ d.equip | f2 }}</td>
+                <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+                {% else %}
+                <td></td><td></td><td></td><td></td><td></td>
+                <td class="num bk">{{ d.amount | f2 }}</td>
+                <td class="num bk">{{ d.freight | f2 }}</td>
+                <td class="num bk">{{ d.equip | f2 }}</td>
+                <td></td><td></td><td></td><td></td><td></td>
+                {% endif %}
+              </tr>
+              {% endfor %}
+            {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr class="grand mx-total">
+                <td>合计</td>
+                <td class="num">{{ r.totals.B | f2 }}</td>
+                <td class="num">{{ r.totals.C | f2 }}</td>
+                <td class="num">{{ r.totals.D | f2 }}</td>
+                <td class="num">{{ r.totals.E | f2 }}</td>
+                <td class="num">{{ r.totals.F | f2 }}</td>
+                <td class="num">{{ r.totals.G | f2 }}</td>
+                <td class="num">{{ r.totals.H | f2 }}</td>
+                <td class="num">{{ r.totals.I | f2 }}</td>
+                <td class="num">{{ r.totals.J | f2 }}</td>
+                <td class="num">{{ r.totals.K | f2 }}</td>
+                <td class="num"></td>
+                <td class="num">{{ r.totals.M | f2 }}</td>
+                <td class="num">{{ r.totals.N | f2 }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+      {{ upload_panel(region) }}
+
+      {% else %}
+      <div class="empty">
+        还没有数据。<br>
+        <button class="btn primary" style="margin-top:12px" onclick="toggle('upload-{{ region.id }}')">上传数据并运行</button>
+      </div>
+      {{ upload_panel(region) }}
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="card-head">
+        <h3>{{ region.name | replace('大区', '') }}</h3>
         {% if region.result %}<span class="chip ok">已更新 {{ region.result.generated_at }}</span>
         {% else %}<span class="chip wait">待上传数据</span>{% endif %}
       </div>
@@ -405,13 +546,14 @@
       </form>
     </div>
     {% endif %}
+    {% endif %}
   </section>
   {% endfor %}
 
-  <footer>
+  <footer id="global-note" data-hide-for="mexico">
     说明：已回款金额 = 表B+表E抵佣金+表R 三表按合同汇总（万元）；已发货合同金额 = 组A有日期梯的表C J 列合计（万元）；
-    可用额度 = 已回款金额 − 已发货合同金额；发货可用额度 = Σ可用额度 + 固定额度 + 未确认回款(ASTRO-LIFT 未确认回款)。算过发货申请后，明细会联动增加“预发货金额”，余额 = 已回款 − 已发货 − 预发货（负数红字），底部“余额（本次发货后）” = 发货可用额度 − 预发货合计；未上传申请时仍为原4列。
-    首列浅蓝 = 该合同存在已发货(组A)梯。上传缓存仅在运行成功时更新，失败保留上一次数据。
+    可用额度 = 已回款金额 − 已发货合同金额；发货可用额度 = Σ可用额度 + 固定额度 + 未确认回款(ASTRO-LIFT 2026年起无合同号)。算过发货申请后，明细会联动增加“预发货金额”，余额 = 已回款 − 已发货 − 预发货（负数红字），底部“余额（本次发货后）” = 发货可用额度 − 预发货合计；未上传申请时仍为原4列。
+    首列浅蓝 = 该合同存在已发货(组A)梯。运行成功才整体替换缓存与结果；运行失败时保留上一次结果，但本次上传的数据文件会保存为缓存，不用重新上传。
   </footer>
 </div>
 
@@ -488,6 +630,12 @@ function setActiveTab(id){
   for (var j = 0; j < panels.length; j++) {
     if (panels[j].id === 'tab-' + id) { panels[j].classList.add('active'); }
     else { panels[j].classList.remove('active'); }
+  }
+  // 页脚口径说明按大区显示：data-hide-for 里列出的大区不显示
+  var note = document.getElementById('global-note');
+  if (note) {
+    var skip = (note.getAttribute('data-hide-for') || '').split(',');
+    note.style.display = (skip.indexOf(id) >= 0) ? 'none' : '';
   }
 }
 function switchTab(id){

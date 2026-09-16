@@ -625,7 +625,7 @@ def compute_region(region, data_dir, output_dir=None):
 
     result = {
         "region_id": region.get("id"),
-        "region_name": region.get("name"),
+        "region_name": (region.get("name") or "").replace("大区", ""),
         "generated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         "rows": rows,
         "count_scope": count_scope,
@@ -1008,3 +1008,519 @@ def save_booking_result(result, region, out_dir):
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     return xlsx_path
+
+
+# ==================== 墨西哥：欠款发货额度（新增区块） ====================
+# 与俄罗斯的差异：外币计量 + 按梯号拆分（已组A / 已订舱未组A）+ 预算成本帐海运费。
+# 本区块全部为新增代码，不修改俄罗斯既有函数的行为。
+
+_MEX_C_COLS = ["合同编号", "标的编号", "签订日期", "组A日期", "产品状态", "国家",
+               "已回款比例（原币）", "合同额（原币）", "汇率"]
+_MEX_COLS = ["合同号", "合同额（万美元）", "已回款金额（万美元）",
+             "已组A金额（万美元）", "已组A海运费金额（万美元）", "已组A设备金额（万美元）",
+             "已订舱未组A金额（万美元）", "已订舱未组A海运费金额（万美元）", "已订舱未组A设备金额（万美元）",
+             "设备欠款金额（万美元）", "海运费欠款金额（万美元）", "汇率",
+             "设备欠款金额人民币（万元）", "海运费欠款金额人民币（万元）"]
+# 列名 -> 结果字典的键（顺序即输出列顺序）
+_MEX_KEY_MAP = [("合同号", "contract"), ("合同额（万美元）", "B"), ("已回款金额（万美元）", "C"),
+                ("已组A金额（万美元）", "D"), ("已组A海运费金额（万美元）", "E"),
+                ("已组A设备金额（万美元）", "F"),
+                ("已订舱未组A金额（万美元）", "G"), ("已订舱未组A海运费金额（万美元）", "H"),
+                ("已订舱未组A设备金额（万美元）", "I"), ("设备欠款金额（万美元）", "J"),
+                ("海运费欠款金额（万美元）", "K"), ("汇率", "L"),
+                ("设备欠款金额人民币（万元）", "M"), ("海运费欠款金额人民币（万元）", "N")]
+_MEX_NUM_KEYS = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "M", "N"]
+
+
+class _MxLogger:
+    """收集口径提示（汇率缺失等），不影响计算流程。"""
+
+    def __init__(self):
+        self.errors = []
+
+    def add_error(self, contract_no, message, source=""):
+        self.errors.append((contract_no, message, source))
+
+
+def read_table_c_mexico(path):
+    """读取表C（墨西哥口径）：需要 合同额（原币）E列 与 汇率 I列。"""
+    df = pd.read_excel(path, sheet_name="sheet1", usecols=_MEX_C_COLS)
+    miss = [c for c in _MEX_C_COLS if c not in df.columns]
+    if miss:
+        raise RuntimeError("表C缺少列: " + ", ".join(miss))
+    df["签订日期"] = pd.to_datetime(df["签订日期"], errors="coerce")
+    df["组A日期"] = pd.to_datetime(df["组A日期"], errors="coerce")
+    df["已回款比例（原币）"] = to_num(df["已回款比例（原币）"])
+    df["合同额（原币）"] = to_num(df["合同额（原币）"]).fillna(0)
+    df["汇率"] = to_num(df["汇率"])
+    df["_contract"] = df["合同编号"].astype(str).str.strip()
+    df["_key"] = df["_contract"].str.upper()
+    df["_bid"] = df["标的编号"].astype(str).str.strip().str.upper()
+    df["_ladder"] = df["_bid"].apply(_bid_ladder_no)
+    return df
+
+
+def build_mexico_scope(df_c, region):
+    """墨西哥有效行：国家含关键词 + 非作废 + 签订日期 >= 起始；并标记“已收满”。"""
+    pattern = str(region.get("country_pattern") or "墨西哥")
+    date_start = pd.Timestamp(region.get("date_start") or "2024-01-01")
+    threshold = float(region.get("ratio_paid_threshold") or 1.0)
+    scope = df_c[df_c["国家"].astype(str).str.contains(pattern, na=False)
+                 & (df_c["产品状态"] != "已作废")
+                 & (df_c["签订日期"] >= date_start)].copy()
+    # 已收满 = 已回款比例四舍五入到 2 位后 >= 阈值（Q1 确认口径）
+    scope["_paid"] = scope["已回款比例（原币）"].notna() & (
+        scope["已回款比例（原币）"].round(2) >= threshold)
+    return scope
+
+
+def read_budget_cost(path):
+    """预算成本帐：返回 ({标的号大写: 预计海运费（外币）}, 重复标的号清单)。"""
+    need = ["标的号", "预计海运费（外币）"]
+    df = pd.read_excel(path, sheet_name=0, usecols=need)
+    miss = [c for c in need if c not in df.columns]
+    if miss:
+        raise RuntimeError("预算成本帐缺少列: " + ", ".join(miss))
+    df["_bid"] = df["标的号"].astype(str).str.strip().str.upper()
+    df["_fee"] = to_num(df["预计海运费（外币）"]).fillna(0)
+    dup = sorted({b for b, n in df["_bid"].value_counts().items() if n > 1})
+    return df.groupby("_bid")["_fee"].sum().to_dict(), dup
+
+
+def read_mexico_booking_list(path):
+    """订舱清单：A 列一行一个合同（合同号 + 可选梯号写法）。"""
+    df = pd.read_excel(path, header=None, dtype=object)
+    texts = []
+    for value in df.iloc[:, 0].tolist():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.lower() != "nan":
+            texts.append(text)
+    return texts
+
+
+def calc_payment_table_b_fx(df_b, rate_map, contract_list, config, logger, exchange_rates=None):
+    """表B 回款（外币口径）：人民币 ÷ 汇率；备注“折合”按人民币 ÷ 汇率；外币取原币。"""
+    rmb_list = config["rmb_currencies"]
+    df_b = df_b.copy()
+    df_b["amount"] = to_num(df_b["amount"]).fillna(0)
+    df_b["fee"] = to_num(df_b["fee"]).fillna(0)
+    df_valid = df_b[df_b["contract_no"].isin(contract_list)].copy()
+
+    def calc_row(row):
+        year = row.get("year", "")
+        rate = get_contract_rate(row["contract_no"], rate_map, logger, "表B-" + str(year))
+        total = float(row["amount"]) + float(row["fee"])
+        if is_rmb(row["currency"], rmb_list):
+            return total / rate if rate else total
+        remark = row.get("remark", None)
+        if exchange_rates and remark is not None and pd.notna(remark):
+            remark_amount, parsed = parse_remark(remark, exchange_rates)
+            if parsed:
+                return remark_amount / rate if rate else remark_amount
+        return total
+
+    df_valid["payment"] = df_valid.apply(calc_row, axis=1)
+    grouped = df_valid.groupby("contract_no")["payment"].sum()
+    return {c: round(grouped.get(c, 0.0), 4) for c in contract_list}
+
+
+def calc_payment_table_e_fx(df_e, rate_map, contract_list, config, logger):
+    """表E 回款（外币口径，仅“抵佣金”）：人民币 ÷ 汇率；外币取原币。"""
+    rmb_list = config["rmb_currencies"]
+    df_dy = df_e[df_e["payment_type"] == "抵佣金"].copy()
+    df_dy["amount"] = to_num(df_dy["amount"]).fillna(0)
+    df_valid = df_dy[df_dy["contract_no"].isin(contract_list)].copy()
+
+    def calc_row(row):
+        amount = float(row["amount"])
+        if is_rmb(row["currency"], rmb_list):
+            rate = get_contract_rate(row["contract_no"], rate_map, logger, "表E-抵佣金")
+            return amount / rate if rate else amount
+        return amount
+
+    df_valid["payment"] = df_valid.apply(calc_row, axis=1)
+    grouped = df_valid.groupby("contract_no")["payment"].sum()
+    return {c: round(grouped.get(c, 0.0), 4) for c in contract_list}
+
+
+def calc_payment_table_r_fx(df_r, rate_map, contract_list, config, logger):
+    """表R 回款（人民币台账，外币口径需 ÷ 汇率）。"""
+    valid = set(contract_list)
+    df_r = df_r.copy()
+    df_r["amount"] = to_num(df_r["amount"]).fillna(0)
+    resolved_map = {}
+    for orig in df_r["contract_no"].unique():
+        resolved_map[orig] = resolve_contract_no(orig, valid)
+    df_r["resolved_no"] = df_r["contract_no"].map(resolved_map)
+    df_valid = df_r[df_r["resolved_no"].notna()].copy()
+    df_valid["resolved_no"] = df_valid["resolved_no"].astype(str)
+
+    def calc_row(row):
+        amount = float(row["amount"])
+        rate = get_contract_rate(row["resolved_no"], rate_map, logger, "表R")
+        return amount / rate if rate else amount
+
+    df_valid["payment"] = df_valid.apply(calc_row, axis=1)
+    grouped = df_valid.groupby("resolved_no")["payment"].sum()
+    return {c: round(grouped.get(c, 0.0), 4) for c in contract_list}
+
+
+def merge_payment_fx(*dicts):
+    """外币口径合并：三个 dict 直接相加（不再 ÷10000）。"""
+    keys = set()
+    for item in dicts:
+        keys |= set(item)
+    return {c: round(sum(d.get(c, 0.0) for d in dicts), 4) for c in keys}
+
+
+def _mex_round(value, digits=2):
+    return round(float(value) + 0.0, digits)
+
+
+def _mex_wan(value, digits=2):
+    """金额统一按「万」计（÷10000，保留 2 位小数）：美元列 → 万美元，人民币列 → 万元。"""
+    return _mex_round(float(value) / 10000.0, digits)
+
+
+def _mex_sort_key(contract):
+    """合同号排序：年份降序 -> 同年编号降序。"""
+    m = _RE_CONTRACT_YEAR_PREFIX.match(str(contract))
+    if not m:
+        return (1, 0, 0)
+    return (0, -int(m.group(1)), -int(m.group(2)))
+
+
+def compute_mexico(region, data_dir, output_dir=None):
+    """墨西哥欠款发货额度：每合同一块（合同行 + 梯号明细行）的 14 列结果。"""
+    cfg = load_main_config()
+    # 界面/导出显示名不带「大区」（与俄罗斯的命名习惯保持一致）
+    name = (region.get("name") or region.get("id") or "墨西哥").replace("大区", "")
+    paths = cfg["paths"]
+    print("=" * 60)
+    print("欠款发货额度统计 — " + str(name))
+    print("数据目录: " + str(data_dir))
+
+    path_c = find_file(data_dir, paths["table_c"])
+    path_b = find_file(data_dir, paths["table_b"])
+    path_e = find_file(data_dir, paths["table_e"])
+    path_r = find_file(data_dir, paths["table_r"])
+    path_bk = find_file(data_dir, paths["mexico_booking"])
+    path_bud = find_file(data_dir, paths["budget_cost"])
+    exchange_path = find_file(data_dir, paths["exchange_rate"])
+
+    # 1) 表C 有效行
+    df_c = read_table_c_mexico(path_c)
+    scope = build_mexico_scope(df_c, region)
+    scope_keys = {}
+    for contract in scope["_contract"]:
+        text = str(contract).strip()
+        scope_keys.setdefault(text.upper(), text)
+    print("表C 墨西哥有效行 %d / %d 合同" % (len(scope), len(scope_keys)))
+
+    # 2) 订舱清单（异常：直接报错终止，不产出结果）
+    if not os.path.isfile(path_bk):
+        raise RuntimeError("缺少订舱清单文件（" + str(paths["mexico_booking"]) + "）")
+    parsed = parse_booking_lines(read_mexico_booking_list(path_bk))
+    if not parsed["ok"]:
+        raise RuntimeError("订舱清单存在问题，已终止计算：" + "；".join(parsed["errors"]))
+    booking_by_contract = {row["contract"]: row for row in parsed["rows"]}
+    print("订舱清单 %d 个合同" % len(booking_by_contract))
+
+    # 3) 预算成本帐（海运费，按标的号精确匹配）
+    fee_map, dup_bids = read_budget_cost(path_bud)
+    warnings = []
+    if dup_bids:
+        warnings.append("预算成本帐存在重复标的号（已按求和处理）：" +
+                        "、".join(dup_bids[:10]) + ("…" if len(dup_bids) > 10 else ""))
+
+    # 4) A 列合同号 = 组A又欠款 ∪ 已订舱未组A
+    group_a_rows = scope[scope["组A日期"].notna() & (~scope["_paid"])]
+    keys_a = {str(k).strip().upper() for k in group_a_rows["_contract"]}
+    keys_all = sorted(set(keys_a) | set(booking_by_contract), key=_mex_sort_key)
+    print("组A又欠款 %d 合同；A 列合计 %d 合同" % (len(keys_a), len(keys_all)))
+
+    # 5) 三表回款（外币口径）
+    logger = _MxLogger()
+    rate_map = build_rate_map(scope)
+    exchange_rates = load_exchange_rates(exchange_path)
+    df_b = read_table_b(cfg, path_b)
+    df_e = read_table_e(cfg, path_e)
+    df_r = read_table_r(cfg, path_r)
+    contract_list = [scope_keys.get(k, k) for k in keys_all]
+    pay_b = calc_payment_table_b_fx(df_b, rate_map, contract_list, cfg, logger, exchange_rates)
+    pay_e = calc_payment_table_e_fx(df_e, rate_map, contract_list, cfg, logger)
+    pay_r = calc_payment_table_r_fx(df_r, rate_map, contract_list, cfg, logger)
+    payment_fx = merge_payment_fx(pay_b, pay_e, pay_r)
+
+    # 6) 逐合同组装（块 = 合同行 + 梯号明细行）
+    blocks = []
+    count_details = 0
+    for key in keys_all:
+        contract = scope_keys.get(key, key)
+        rows = scope[scope["_key"] == key]
+        if rows.empty:
+            raise RuntimeError("合同 " + contract +
+                               " 不在墨西哥台账口径内（国家/签订日期/产品状态过滤后无该合同）")
+        rates = sorted({float(r) for r in rows["汇率"].dropna().tolist() if float(r) != 0})
+        if not rates:
+            rate = 0.0
+            warnings.append(contract + "：表C 汇率缺失或为 0，人民币等值按 0 处理")
+        else:
+            rate = rates[0]
+            if len(rates) > 1:
+                warnings.append(contract + "：表C 存在多个汇率 " + str(rates) + "，取第一个")
+        amount = float(rows["合同额（原币）"].sum())
+
+        details = []
+        # 已组A部分：组A日期非空 且 未收满（Q3 确认口径）
+        a_rows = rows[rows["组A日期"].notna() & (~rows["_paid"])].sort_values("_ladder")
+        d_amount = 0.0
+        e_fee = 0.0
+        for _, row in a_rows.iterrows():
+            ladder = row["_ladder"]
+            bid = str(row["_bid"]).strip().upper()
+            if pd.isna(ladder):
+                warnings.append(contract + "：标的编号无法解析梯号（" + str(row["标的编号"]) +
+                                "），已跳过该明细行")
+                continue
+            fee = float(fee_map.get(bid, 0.0))
+            if bid not in fee_map:
+                warnings.append(contract + " " + str(int(ladder)) + "#：预算成本帐无该标的号，海运费按 0")
+            row_amount = float(row["合同额（原币）"])
+            d_amount += row_amount
+            e_fee += fee
+            details.append({"ladder": int(ladder), "group": "ga",
+                            "amount": _mex_round(row_amount),
+                            "freight": _mex_round(fee),
+                            "equip": _mex_round(row_amount - fee)})
+
+        # 已订舱未组A部分：订舱清单指定的梯号
+        g_amount = 0.0
+        h_fee = 0.0
+        booking = booking_by_contract.get(key)
+        if booking is not None:
+            if booking["ladders"] is None:
+                selected = rows.sort_values("_ladder")
+            else:
+                want = set(booking["ladders"])
+                have = {int(v) for v in rows["_ladder"].dropna().tolist()}
+                missing = sorted(want - have)
+                if missing:
+                    raise RuntimeError(
+                        "订舱清单存在问题，已终止计算：" + contract + " 的梯号 " +
+                        "、".join(str(n) + "#" for n in missing) + " 在表C台账中不存在")
+                selected = rows[rows["_ladder"].isin(want)].sort_values("_ladder")
+            for _, row in selected.iterrows():
+                ladder = row["_ladder"]
+                bid = str(row["_bid"]).strip().upper()
+                if pd.isna(ladder):
+                    warnings.append(contract + "：标的编号无法解析梯号（" + str(row["标的编号"]) +
+                                    "），已跳过该明细行")
+                    continue
+                fee = float(fee_map.get(bid, 0.0))
+                if bid not in fee_map:
+                    warnings.append(contract + " " + str(int(ladder)) +
+                                    "#：预算成本帐无该标的号，海运费按 0")
+                row_amount = float(row["合同额（原币）"])
+                g_amount += row_amount
+                h_fee += fee
+                details.append({"ladder": int(ladder), "group": "bk",
+                                "amount": _mex_round(row_amount),
+                                "freight": _mex_round(fee),
+                                "equip": _mex_round(row_amount - fee)})
+
+        if key in keys_a and booking is not None:
+            source = "组A+订舱"
+        elif key in keys_a:
+            source = "组A欠款"
+        else:
+            source = "已订舱未组A"
+
+        f_amount = _mex_round(d_amount - e_fee)
+        i_amount = _mex_round(g_amount - h_fee)
+        c_amount = _mex_round(payment_fx.get(contract, 0.0))
+        j_amount = _mex_round(max(0.0, f_amount + i_amount - c_amount))
+        k_amount = _mex_round(amount - c_amount) if j_amount == 0 else \
+            _mex_round(amount - c_amount - j_amount)
+        # 展示与导出一律按「万美元 / 万元」（÷10000，两位小数），与俄罗斯的「万元」口径对齐
+        blocks.append({
+            "contract": contract, "source": source,
+            "B": _mex_wan(amount), "C": _mex_wan(c_amount),
+            "D": _mex_wan(d_amount), "E": _mex_wan(e_fee), "F": _mex_wan(f_amount),
+            "G": _mex_wan(g_amount), "H": _mex_wan(h_fee), "I": _mex_wan(i_amount),
+            "J": _mex_wan(j_amount), "K": _mex_wan(k_amount), "L": round(rate, 4),
+            "M": _mex_wan(j_amount * rate), "N": _mex_wan(k_amount * rate),
+            "details": [{"ladder": d["ladder"], "group": d["group"],
+                         "amount": _mex_wan(d["amount"]),
+                         "freight": _mex_wan(d["freight"]),
+                         "equip": _mex_wan(d["equip"])} for d in details],
+        })
+        count_details += len(details)
+
+    blocks.sort(key=lambda item: _mex_sort_key(item["contract"]))
+    totals = {key: _mex_round(sum(item[key] for item in blocks)) for key in _MEX_NUM_KEYS}
+    for item in logger.errors:
+        warnings.append("汇率提示：" + " | ".join(str(part) for part in item))
+
+    print("合同块 %d 个 / 明细行 %d 行 / 数据行 %d 行" %
+          (len(blocks), count_details, len(blocks) + count_details))
+    print("设备欠款合计 %s 万美元；海运费欠款合计 %s 万美元" %
+          (format(totals["J"], ",.2f"), format(totals["K"], ",.2f")))
+    print("折人民币 %.2f 万元 / %.2f 万元" % (totals["M"], totals["N"]))
+
+    result = {
+        "kind": "mexico",
+        "region_id": region.get("id"),
+        "region_name": name,
+        "generated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "blocks": blocks,
+        "totals": totals,
+        "count_contracts": len(blocks),
+        "count_details": count_details,
+        "count_group_a": len(keys_a),
+        "count_booking": len(booking_by_contract),
+        "scope_rows": int(len(scope)),
+        "scope_contracts": len(scope_keys),
+        "warnings": warnings,
+    }
+    if output_dir:
+        _write_mexico_outputs(result, region, output_dir)
+    return result
+
+
+def _write_mexico_outputs(result, region, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    prefix = str(region.get("out_prefix") or "欠款发货额度统计-墨西哥")
+    xlsx_path = os.path.join(output_dir, prefix + ".xlsx")
+    html_path = os.path.join(output_dir, prefix + ".html")
+    json_path = os.path.join(output_dir, "_result_" + str(region.get("id", "mexico")) + ".json")
+    _write_mexico_excel(result, xlsx_path)
+    _write_mexico_html(result, html_path)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False)
+    print("[输出] Excel: " + xlsx_path)
+    print("[输出] HTML : " + html_path)
+    return xlsx_path
+
+
+def _write_mexico_excel(result, xlsx_path):
+    """块状输出：表头 + （合同行 + 梯号明细行）× N + 合计行。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "欠款发货额度统计"
+    head_fill = PatternFill("solid", fgColor="D9D9D9")
+    contract_fill = PatternFill("solid", fgColor="E7E6E6")
+    ga_fill = PatternFill("solid", fgColor="DDEBF7")      # 已组A明细：浅蓝
+    bk_fill = PatternFill("solid", fgColor="FFF2CC")      # 已订舱明细：浅黄
+    total_fill = PatternFill("solid", fgColor="FCE4D6")
+    bold = Font(bold=True)
+    thin = Side(style="thin", color="B0B0B0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    num_fmt = "#,##0.00"
+    n_cols = len(_MEX_COLS)
+
+    ws.append(_MEX_COLS)
+    for cell in ws[1]:
+        cell.fill = head_fill
+        cell.font = bold
+        cell.border = border
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    def put_row(values, fill=None, font=None, fill_cols=None, font_cols=None):
+        ws.append(values)
+        row_idx = ws.max_row
+        for ci in range(1, n_cols + 1):
+            cell = ws.cell(row=row_idx, column=ci)
+            cell.border = border
+            if ci >= 2:
+                cell.number_format = num_fmt
+            if fill and (fill_cols is None or ci in fill_cols):
+                cell.fill = fill
+            if font and (font_cols is None or ci in font_cols):
+                cell.font = font
+        return row_idx
+
+    for block in result["blocks"]:
+        put_row([block[key] for _, key in _MEX_KEY_MAP],
+                fill=contract_fill, font=bold)
+        for detail in block["details"]:
+            values = [None] * n_cols
+            values[0] = "    " + str(detail["ladder"]) + "#"
+            if detail["group"] == "ga":
+                values[3] = detail["amount"]
+                values[4] = detail["freight"]
+                values[5] = detail["equip"]
+                put_row(values, fill=ga_fill, fill_cols=(4, 5, 6))
+            else:
+                values[6] = detail["amount"]
+                values[7] = detail["freight"]
+                values[8] = detail["equip"]
+                put_row(values, fill=bk_fill, fill_cols=(7, 8, 9))
+
+    # 合计行：汇率为比率，不参与求和（留空）
+    put_row(["合计"] + [result["totals"].get(key) for _, key in _MEX_KEY_MAP[1:]],
+            fill=total_fill, font=bold)
+
+    ws.column_dimensions["A"].width = 18
+    for ci in range(2, n_cols + 1):
+        ws.column_dimensions[get_column_letter(ci)].width = 16
+    ws.row_dimensions[1].height = 34
+    ws.freeze_panes = "A2"
+    wb.save(xlsx_path)
+
+
+def _write_mexico_html(result, html_path):
+    """本地自包含 HTML 看板（与 Flask 看板同结构、同配色）。"""
+    def num(value):
+        return format(float(value or 0), ",.2f")
+
+    n_cols = len(_MEX_KEY_MAP) - 1
+    body = []
+    for block in result["blocks"]:
+        cells = "".join('<td class="num">' + num(block.get(key)) + "</td>"
+                        for _, key in _MEX_KEY_MAP[1:])
+        body.append('<tr class="contract"><td>' + str(block["contract"]) + "</td>" +
+                    cells + "</tr>")
+        for detail in block["details"]:
+            row = ['<td>' + "    " + str(detail["ladder"]) + "#</td>"] + [""] * n_cols
+            css = "ga" if detail["group"] == "ga" else "bk"
+            start = 3 if detail["group"] == "ga" else 6
+            for offset, key in enumerate(("amount", "freight", "equip")):
+                row[start + offset] = ('<td class="num ' + css + '">' +
+                                       num(detail[key]) + "</td>")
+            body.append("<tr>" + "".join(row) + "</tr>")
+    total_cells = "".join(
+        ('<td class="num">' + num(result["totals"][key]) + "</td>")
+        if key in result["totals"] else '<td class="num"></td>'
+        for _, key in _MEX_KEY_MAP[1:])
+    head = "".join("<th>" + name + "</th>" for name in _MEX_COLS)
+    html = (
+        "<!DOCTYPE html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\">"
+        "<title>欠款发货额度统计</title>\n<style>\n"
+        "body { font-family: \"Microsoft YaHei\", sans-serif; margin: 20px; }\n"
+        "table { border-collapse: collapse; }\n"
+        "th, td { border: 1px solid #aaa; padding: 3px 8px; font-size: 12px; white-space: nowrap; }\n"
+        "th { background: #d9d9d9; }\n"
+        ".num { text-align: right; }\n"
+        "tr.contract td { background: #e7e6e6; font-weight: 700; }\n"
+        "td.ga { background: #ddebf7; }\n"
+        "td.bk { background: #fff2cc; }\n"
+        "tr.total td { background: #fce4d6; font-weight: 700; border-top: 3px double #000; }\n"
+        ".legend span { display: inline-block; margin-right: 14px; font-size: 12px; padding: 2px 8px; }\n"
+        "</style></head><body>\n"
+        "<h2>欠款发货额度统计（" + str(result["region_name"]) + "）</h2>\n"
+        "<p class=\"legend\"><span style=\"background:#ddebf7\">浅蓝 = 已组A梯号明细</span>"
+        "<span style=\"background:#fff2cc\">浅黄 = 已订舱未组A梯号明细</span>"
+        "合同行 = 该合同合计　生成时间 " + str(result["generated_at"]) + "</p>\n"
+        "<table><thead><tr>" + head + "</tr></thead>\n<tbody>" + "".join(body) +
+        '<tr class="total"><td>合计</td>' + total_cells + "</tr>\n</tbody></table>\n"
+        "</body></html>"
+    )
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)

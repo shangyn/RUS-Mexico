@@ -13,6 +13,8 @@ paths:
   table_e: "gm_ht_hthkmx(44).xls"
   table_r: "人民币回款台账1.xlsx"
   exchange_rate: "汇率对应txt.txt"
+  mexico_booking: "墨西哥已订舱未组A合同号.xlsx"
+  budget_cost: "预算成本帐.xlsx"
   output_table_f: "表F_发货合同收款统计.xlsx"
   output_table_f1: "表F1_发货合同收款统计(全量).xlsx"
   error_log: "报错文档.xlsx"
