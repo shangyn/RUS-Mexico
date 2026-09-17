@@ -4,3 +4,4 @@ openpyxl
 xlrd
 pyyaml
 waitress
+fpdf2

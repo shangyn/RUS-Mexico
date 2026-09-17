@@ -68,7 +68,7 @@
   input[type=password] { width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
   .field .hint { display: block; font-size: 11px; color: #94a3b8; margin-top: 4px; line-height: 1.45; }
   .btn.sm { padding: 7px 14px; font-size: 13px; }
-  /* 订舱清单免密码入口：独立成块，位于上传框下方 */
+/* 订舱清单入口：独立成块，位于上传框下方（与更新数据同一密码） */
   .booking-run { display: flex; flex-direction: column; gap: 8px; }
   .booking-run .bk-title { font-size: 12px; font-weight: 600; color: #475569; }
   .booking-run .bk-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -225,7 +225,7 @@
           <tr><td>{{ f.label }}</td><td class="col-file">{{ f.original or '（无）' }}</td><td class="col-date">{{ f.uploaded_at or '（无记录）' }}</td></tr>
           {% endfor %}
         </table>
-        <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。订舱清单可用下方「开始运算」免密码单独更新。</div>
+        <div class="cache-note">可直接不选文件点“开始运行”用缓存重算；或只替换需要更新的文件，未选的自动沿用上表数据。订舱清单可用下方「开始运算」单独更新（同样需要密码）。</div>
         {% else %}
         <div class="cache-note warn">首次运行：需上传 表C / 表B / 表E / 表R / 订舱清单 / 预算成本帐 六个文件（汇率可选）。</div>
         {% endif %}
@@ -239,7 +239,7 @@
         </label>
         {% endif %}
         {% endfor %}
-        <label class="field"><b>更新密码</b><input type="password" name="password" placeholder="请输入密码" required><span class="hint">订舱清单可用下方「开始运算」免密码更新，其余文件需要密码</span></label>
+        <label class="field"><b>更新密码</b><input type="password" name="password" placeholder="请输入密码" required><span class="hint">订舱清单可用下方「开始运算」单独更新，同样需要密码</span></label>
       </div>
       <button class="btn primary" type="submit">开始运行（约 1~3 分钟）</button>
       <button class="btn ghost" type="button" onclick="hide('upload-{{ region.id }}')">取消</button>
@@ -249,9 +249,10 @@
       <b class="bk-title">订舱清单 · 墨西哥已订舱未组A合同号 (.xlsx)</b>
       <div class="bk-row">
         <input type="file" name="mexico_booking" accept=".xlsx" form="mx-run-{{ region.id }}">
+        <input type="password" name="password" placeholder="请输入密码" form="mx-run-{{ region.id }}" required>
         <button class="btn primary sm" type="submit" form="mx-run-{{ region.id }}" onclick="return startBusy('run', document.getElementById('mx-run-{{ region.id }}'), this)">开始运算</button>
       </div>
-      <span class="hint">免密码：选好文件点「开始运算」；不选文件则用缓存重算。表C / 表B / 表E / 表R、预算成本帐、汇率文件仍需密码。</span>
+      <span class="hint">需要密码：选好文件填密码后点「开始运算」；不选文件则用缓存重算。表C / 表B / 表E / 表R、预算成本帐、汇率文件走上方「开始运行」。</span>
     </div>
     <form id="mx-run-{{ region.id }}" method="post" action="{{ url_for('run_booking') }}" enctype="multipart/form-data">
       <input type="hidden" name="region" value="{{ region.id }}">
@@ -312,6 +313,7 @@
       <div class="actions">
         <button class="btn ghost" onclick="toggle('table-{{ region.id }}')">查看明细（{{ r.count_contracts }} 个合同 / 共 {{ r.count_contracts + r.count_details }} 行）</button>
         <a class="btn ghost" href="{{ url_for('download', region_id=region.id) }}">下载 Excel</a>
+        <a class="btn ghost" href="{{ url_for('voucher', region_id=region.id) }}">下载订舱凭证 PDF</a>
         <button class="btn primary" onclick="toggle('upload-{{ region.id }}')">更新数据</button>
       </div>
 
@@ -528,6 +530,10 @@
           <b>订舱发货 Excel（.xlsx）</b>
           <input type="file" name="booking_file" accept=".xlsx" required>
         </label>
+        <label class="book-file">
+          <b>更新密码</b>
+          <input type="password" name="password" placeholder="请输入密码" required>
+        </label>
         <button class="btn primary" type="submit">计算总价</button>
       </form>
 
@@ -560,6 +566,7 @@
         {% if not b.save_error %}
         <a class="btn ghost" href="{{ url_for('booking_download', region_id=region.id) }}">下载明细 Excel（{{ b.details | length }} 行）</a>
         {% endif %}
+        <a class="btn primary" href="{{ url_for('voucher', region_id=region.id) }}">下载发货凭证 PDF</a>
         <button class="btn ghost" onclick="toggle('book-detail-{{ region.id }}')">查看逐梯明细（{{ b.details | length }} 行）</button>
       </div>
       {% if b.save_error %}

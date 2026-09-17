@@ -292,6 +292,8 @@ def booking():
         return render_page(view, "无效或未启用的区域")
     if target.get("kind") == "mexico":
         return render_page(view, "墨西哥大区不使用「发货申请」功能（订舱清单在「更新数据」里上传）")
+    if request.form.get("password", "") != UPLOAD_PASSWORD:
+        return set_error("更新密码错误，请重新输入")
     fs = request.files.get("booking_file")
     if fs is None or not fs.filename:
         return set_error("请先选择订舱发货 Excel 文件")
@@ -369,7 +371,7 @@ def run():
     if booking_only:
         if region.get("kind") != "mexico":
             return back("该入口仅墨西哥大区可用")
-    elif request.form.get("password", "") != UPLOAD_PASSWORD:
+    if request.form.get("password", "") != UPLOAD_PASSWORD:
         return back("密码错误")
 
     cfg = load_main_config()
@@ -634,6 +636,39 @@ def download(region_id):
     if not os.path.isfile(xlsx):
         abort(404)
     return send_file(xlsx, as_attachment=True, download_name=os.path.basename(xlsx))
+
+
+@app.route("/voucher/<region_id>")
+def voucher(region_id):
+    """下载该大区当前这份申请的凭证 PDF。
+    首次点击时建档编号并归档，同一份申请重复下载复用同一张凭证。"""
+    regions = load_regions()
+    region = next((r for r in regions if r["id"] == region_id and r.get("enabled")), None)
+    if region is None:
+        abort(404)
+
+    def back(text):
+        return redirect(url_for("index", msg=text, _anchor=region_id))
+
+    result = load_result(region)
+    if result is None:
+        return back("该大区还没有计算结果，无法生成凭证")
+
+    booking = None
+    booking_file = ""
+    if region.get("kind") == "mexico":
+        booking_file = (load_cache_meta(region_id).get("mexico_booking") or {}).get("original") or ""
+    else:
+        booking = load_booking(region_id)
+        if not booking:
+            return back("该大区还没有通过校验的发货申请，无法生成凭证")
+    try:
+        from voucher import generate_voucher
+        path, _record = generate_voucher(region, region_base(region_id), BASE_DIR, result,
+                                         booking=booking, booking_file=booking_file)
+    except Exception as e:
+        return back("凭证生成失败：" + str(e))
+    return send_file(path, as_attachment=True, download_name=os.path.basename(path))
 
 
 if __name__ == "__main__":

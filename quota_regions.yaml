@@ -12,6 +12,7 @@ regions:
     llc_company: "LLC ASTRO-LIFT"
     llc_year_from: 2026
     out_prefix: "发货额度统计-俄罗斯"
+    voucher_prefix: "RU"          # 凭证编号前缀
 
   - id: mexico
     name: 墨西哥大区
@@ -22,6 +23,7 @@ regions:
     date_start: "2024-01-01"
     ratio_paid_threshold: 1
     out_prefix: "欠款发货额度统计-墨西哥"
+    voucher_prefix: "MX"          # 凭证编号前缀
 
   - id: americas
     name: 美洲大区
