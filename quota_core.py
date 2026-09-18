@@ -138,7 +138,7 @@ def read_table_b(config, path):
         mask = extracted.notna()
         if mask.any():
             df.loc[mask, "contract_no"] = extracted[mask]
-        keep = ["contract_no", "amount", "fee", "currency"]
+        keep = ["contract_no", "amount", "fee", "currency", "tid"]
         if "remark" in df.columns:
             keep.append("remark")
         df = df[keep].copy()
@@ -1031,15 +1031,111 @@ _MEX_KEY_MAP = [("合同号", "contract"), ("合同额（万美元）", "B"), ("
                 ("设备欠款金额人民币（万元）", "M"), ("海运费欠款金额人民币（万元）", "N")]
 _MEX_NUM_KEYS = ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "M", "N"]
 
+_RE_TID_RANGE = re.compile(r"(\d{1,4})\s*#\s*[-~]\s*(\d{1,4})\s*#")
+_RE_TID_LADDER = re.compile(r"(\d{1,4})\s*#")
+
+
+def parse_tid_ladders(value):
+    """从表B“梯号”文本解析梯号集合，解析不出返回 None。
+
+    支持写法：1#-4#12#13# / 5#6#16#-19# / DHT-240008T:1#-19# / 空格、逗号分隔
+    """
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = (text.replace("＃", "#").replace("－", "-")
+                .replace("—", "-").replace("～", "-").replace("~", "-"))
+    ladders = set()
+    for m in _RE_TID_RANGE.finditer(text):
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo <= hi and hi - lo <= 200:
+            ladders.update(range(lo, hi + 1))
+    for m in _RE_TID_LADDER.finditer(text):
+        ladders.add(int(m.group(1)))
+    return ladders or None
+
+
+def build_mex_ladder_scope(scope, keys_all, booking_by_contract):
+    """按合同算“本批展示梯”集合与权重（已回款比例×合同额 / 合同额）。
+
+    展示梯 = 组A日期非空且未收满的梯 ∪ 订舱清单指定的梯（与 D/G 列口径一致）。
+    返回 {合同大写: {"in_scope": set, "pay_w": {梯: 比例×合同额}, "amt_w": {梯: 合同额}}}
+    """
+    result = {}
+    for key in keys_all:
+        rows = scope[scope["_key"] == key]
+        in_scope = set()
+        pay_w = {}
+        amt_w = {}
+        for _, row in rows.iterrows():
+            ladder = row["_ladder"]
+            if pd.isna(ladder):
+                continue
+            ladder = int(ladder)
+            amount = float(row["合同额（原币）"])
+            ratio = row["已回款比例（原币）"]
+            ratio = float(ratio) if pd.notna(ratio) else 0.0
+            amt_w[ladder] = amt_w.get(ladder, 0.0) + amount
+            pay_w[ladder] = pay_w.get(ladder, 0.0) + amount * ratio
+            if pd.notna(row["组A日期"]) and not bool(row["_paid"]):
+                in_scope.add(ladder)
+        booking = booking_by_contract.get(key)
+        if booking is not None:
+            if booking["ladders"] is None:
+                in_scope |= {int(v) for v in rows["_ladder"].dropna().tolist()}
+            else:
+                in_scope |= {int(v) for v in booking["ladders"]}
+        result[key] = {"in_scope": in_scope, "pay_w": pay_w, "amt_w": amt_w}
+    return result
+
+
+def split_tid_payment(payment, tid_value, scope_info):
+    """按“梯号”把一行表B回款折算成“本批展示梯”的份额（金额以表B行金额为准）。
+
+    返回 (折算后金额, 提示文本)；整行都在本批范围内时提示为 None。
+    权重优先用 已回款比例×合同额（台账），全为 0 时退回合同额权重。
+    """
+    ladders = parse_tid_ladders(tid_value)
+    if not ladders:
+        return payment, None
+    in_scope = scope_info["in_scope"]
+    if ladders <= in_scope:
+        return payment, None
+    outside = "、".join(str(n) + "#" for n in sorted(ladders - in_scope))
+    for kind, weights in (("已回款比例", scope_info["pay_w"]), ("合同额", scope_info["amt_w"])):
+        base = sum(weights.get(n, 0.0) for n in ladders)
+        if base <= 0:
+            continue
+        inside = sum(v for n, v in weights.items() if n in ladders and n in in_scope)
+        if inside <= 0:
+            return 0.0, ("表B 梯号 " + str(tid_value) + " 全部为非本批梯（" + outside +
+                         "），该行回款 " + format(payment, ",.2f") + " 不计入已回款")
+        if inside >= base:
+            return payment, None
+        scaled = payment * inside / base
+        return scaled, ("表B 梯号 " + str(tid_value) + " 含非本批梯（" + outside + "）；按" +
+                        kind + "权重折算，" + format(payment, ",.2f") + " → " +
+                        format(scaled, ",.2f"))
+    return payment, ("表B 梯号 " + str(tid_value) + " 含非本批梯（" + outside +
+                     "），台账无比例/合同额可折算，整行 " + format(payment, ",.2f") +
+                     " 计入已回款")
+
 
 class _MxLogger:
     """收集口径提示（汇率缺失等），不影响计算流程。"""
 
     def __init__(self):
         self.errors = []
+        self.notes = []
 
     def add_error(self, contract_no, message, source=""):
         self.errors.append((contract_no, message, source))
+
+    def add_note(self, contract_no, message):
+        """口径提示（如：表B 行含非本批梯，已按权重折算）。"""
+        self.notes.append(str(contract_no) + "：" + str(message))
 
 
 def read_table_c_mexico(path):
@@ -1100,8 +1196,12 @@ def read_mexico_booking_list(path):
     return texts
 
 
-def calc_payment_table_b_fx(df_b, rate_map, contract_list, config, logger, exchange_rates=None):
-    """表B 回款（外币口径）：人民币 ÷ 汇率；备注“折合”按人民币 ÷ 汇率；外币取原币。"""
+def calc_payment_table_b_fx(df_b, rate_map, contract_list, config, logger, exchange_rates=None,
+                            ladder_scope=None):
+    """表B 回款（外币口径）：人民币 ÷ 汇率；备注“折合”按人民币 ÷ 汇率；外币取原币。
+
+    ladder_scope 非空时（墨西哥）：按“梯号”把本批范围外梯的回款从行金额里折算掉。
+    """
     rmb_list = config["rmb_currencies"]
     df_b = df_b.copy()
     df_b["amount"] = to_num(df_b["amount"]).fillna(0)
@@ -1122,6 +1222,22 @@ def calc_payment_table_b_fx(df_b, rate_map, contract_list, config, logger, excha
         return total
 
     df_valid["payment"] = df_valid.apply(calc_row, axis=1)
+    if ladder_scope:
+        payments = []
+        for _, row in df_valid.iterrows():
+            info = ladder_scope.get(str(row["contract_no"]).strip().upper())
+            amount = float(row["payment"])
+            if info is None:
+                payments.append(amount)
+                continue
+            tid = row["tid"] if "tid" in row.index else None
+            scaled, note = split_tid_payment(amount, tid, info)
+            if note:
+                add_note = getattr(logger, "add_note", None)
+                if add_note:
+                    add_note(row["contract_no"], note)
+            payments.append(scaled)
+        df_valid["payment"] = payments
     grouped = df_valid.groupby("contract_no")["payment"].sum()
     return {c: round(grouped.get(c, 0.0), 4) for c in contract_list}
 
@@ -1241,15 +1357,17 @@ def compute_mexico(region, data_dir, output_dir=None):
     keys_all = sorted(set(keys_a) | set(booking_by_contract), key=_mex_sort_key)
     print("组A又欠款 %d 合同；A 列合计 %d 合同" % (len(keys_a), len(keys_all)))
 
-    # 5) 三表回款（外币口径）
+    # 5) 三表回款（外币口径）：表B 按梯号折算掉“非本批梯”的回款（金额以表B行金额为准）
     logger = _MxLogger()
     rate_map = build_rate_map(scope)
     exchange_rates = load_exchange_rates(exchange_path)
+    ladder_scope = build_mex_ladder_scope(scope, keys_all, booking_by_contract)
     df_b = read_table_b(cfg, path_b)
     df_e = read_table_e(cfg, path_e)
     df_r = read_table_r(cfg, path_r)
     contract_list = [scope_keys.get(k, k) for k in keys_all]
-    pay_b = calc_payment_table_b_fx(df_b, rate_map, contract_list, cfg, logger, exchange_rates)
+    pay_b = calc_payment_table_b_fx(df_b, rate_map, contract_list, cfg, logger, exchange_rates,
+                                    ladder_scope)
     pay_e = calc_payment_table_e_fx(df_e, rate_map, contract_list, cfg, logger)
     pay_r = calc_payment_table_r_fx(df_r, rate_map, contract_list, cfg, logger)
     payment_fx = merge_payment_fx(pay_b, pay_e, pay_r)
@@ -1361,6 +1479,7 @@ def compute_mexico(region, data_dir, output_dir=None):
 
     blocks.sort(key=lambda item: _mex_sort_key(item["contract"]))
     totals = {key: _mex_round(sum(item[key] for item in blocks)) for key in _MEX_NUM_KEYS}
+    warnings.extend(logger.notes)
     for item in logger.errors:
         warnings.append("汇率提示：" + " | ".join(str(part) for part in item))
 
