@@ -240,6 +240,14 @@ def _export_ledger(region_kind, records, region_base):
     wb.save(os.path.join(voucher_dir(region_base), LEDGER_XLSX))
 
 
+def _data_date(result, booking=None):
+    """数据日期 = 额度计算时间与订舱计算时间中较新的那个（点任一种运算都会刷新）。"""
+    times = [str((result or {}).get("generated_at") or "").strip(),
+             str((booking or {}).get("calculated_at") or "").strip()]
+    times = [t for t in times if t]
+    return max(times) if times else ""
+
+
 def _next_no(records, prefix):
     day = datetime.now().strftime("%Y%m%d")
     head = prefix + "-" + day + "-"
@@ -255,7 +263,7 @@ def _safe(name):
 
 # ------------------------------------------------------------------ 俄罗斯
 
-def _build_russia(pdf, region, result, booking, no, created_at):
+def _build_russia(pdf, region, result, booking, no, created_at, data_date):
     grand = float(result["grand"])
     total_wan = float(booking["total_wan"])
     balance = float(booking.get("balance_wan") or 0)
@@ -264,8 +272,7 @@ def _build_russia(pdf, region, result, booking, no, created_at):
     _head(pdf, "发货额度申请凭证",
           (region.get("name") or "").replace("大区", "") + "大区 · " + (region.get("note") or "发货额度"),
           no, created_at,
-          [("申请时间", booking.get("calculated_at") or ""),
-           ("数据日期", result.get("generated_at") or "")])
+          [("数据日期", data_date)])
 
     _section(pdf, "一、额度核定结论")
     _banner(pdf,
@@ -295,7 +302,7 @@ def _build_russia(pdf, region, result, booking, no, created_at):
     _notes(pdf, [
         "金额口径：合同额取表C「合同额（人民币）」，回款为表B / 表E抵佣金 / 表R 三表按合同汇总，单位万元。",
         "已回款金额合计 " + _money(result["sum2"]) + " 万元，已发货合同金额合计 " +
-        _money(result["sum3"]) + " 万元，数据日期 " + str(result.get("generated_at") or "") + "。",
+        _money(result["sum3"]) + " 万元，数据日期 " + str(data_date) + "。",
         "本凭证由系统按台账自动生成并归档，PDF 已锁定编辑权限；如与系统记录不符，以系统记录为准。",
     ])
 
@@ -314,13 +321,13 @@ def _build_russia(pdf, region, result, booking, no, created_at):
     pdf.ln(2)
 
 
-def _record_russia(region, result, booking, no, created_at, pdf_name):
+def _record_russia(region, result, booking, no, created_at, pdf_name, data_date):
     return {
         "no": no,
         "created_at": created_at,
-        "source_time": str(booking.get("calculated_at") or ""),
+        "source_time": data_date,
         "apply_time": str(booking.get("calculated_at") or ""),
-        "data_time": str(result.get("generated_at") or ""),
+        "data_time": data_date,
         "file": str(booking.get("uploaded_name") or ""),
         "total_wan": round(float(booking.get("total_wan") or 0), 2),
         "grand_wan": round(float(result.get("grand") or 0), 2),
@@ -332,7 +339,7 @@ def _record_russia(region, result, booking, no, created_at, pdf_name):
 
 # ------------------------------------------------------------------ 墨西哥
 
-def _build_mexico(pdf, region, result, booking_file, no, created_at):
+def _build_mexico(pdf, region, result, booking_file, no, created_at, data_date):
     totals = result["totals"]
     equip = float(totals["J"])
     freight = float(totals["K"])
@@ -340,8 +347,7 @@ def _build_mexico(pdf, region, result, booking_file, no, created_at):
     _head(pdf, "订舱申请凭证",
           (region.get("name") or "").replace("大区", "") + "大区 · 欠款发货额度（万美元）",
           no, created_at,
-          [("订舱申请时间", result.get("generated_at") or ""),
-           ("数据日期", result.get("generated_at") or "")])
+          [("数据日期", data_date)])
 
     _section(pdf, "一、订舱申请登记")
     _banner(pdf,
@@ -374,7 +380,7 @@ def _build_mexico(pdf, region, result, booking_file, no, created_at):
 
     notes = [
         "金额口径：均为万美元（原币），回款为表B / 表E抵佣金 / 表R 三表按合同汇总。",
-        "数据日期 " + str(result.get("generated_at") or "") + "。",
+        "数据日期 " + str(data_date) + "。",
         "本凭证由系统按台账与订舱清单自动生成并归档，PDF 已锁定编辑权限；如与系统记录不符，以系统记录为准。",
     ]
     if result.get("warnings"):
@@ -382,15 +388,15 @@ def _build_mexico(pdf, region, result, booking_file, no, created_at):
     _notes(pdf, notes)
 
 
-def _record_mexico(region, result, booking_file, no, created_at, pdf_name):
+def _record_mexico(region, result, booking_file, no, created_at, pdf_name, data_date):
     totals = result["totals"]
     equip = float(totals["J"])
     freight = float(totals["K"])
     return {
         "no": no,
         "created_at": created_at,
-        "source_time": str(result.get("generated_at") or ""),
-        "apply_time": str(result.get("generated_at") or ""),
+        "source_time": data_date,
+        "apply_time": data_date,
         "file": booking_file or "",
         "booking_contracts": int(result.get("count_booking") or 0),
         "arrears_equip": round(equip, 2),
@@ -403,35 +409,41 @@ def _record_mexico(region, result, booking_file, no, created_at, pdf_name):
 # ------------------------------------------------------------------ 对外入口
 
 def generate_voucher(region, region_base, app_dir, result, booking=None, booking_file=""):
-    """生成（或复用）该大区当前这份申请的凭证 PDF。
+    """生成（或刷新）该大区当前这份申请的凭证 PDF。
 
-    返回 (pdf_path, record)。同一申请时间已归档过则直接复用，不重复建号。
+    数据日期 = 额度计算时间与订舱计算时间中较新的那个；数据日期不变时沿用同一凭证编号，
+    每次下载按当前时间重新渲染（生成时间 = 下载时间），并刷新归档台账里的这份记录。
+    返回 (pdf_path, record)。
     """
     kind = "mexico" if region.get("kind") == "mexico" else "russia"
-    source_time = str((result or {}).get("generated_at") or "")
-    if kind == "russia":
-        source_time = str((booking or {}).get("calculated_at") or "")
+    data_date = _data_date(result, booking)
 
     records = load_ledger(region_base)
-    for record in records:
-        if record.get("source_time") == source_time and record.get("kind") == kind:
-            path = os.path.join(voucher_dir(region_base), record.get("pdf", ""))
-            if os.path.isfile(path):
-                return path, record
+    record = None
+    for item in records:
+        if item.get("source_time") == data_date and item.get("kind") == kind:
+            record = item
+            break
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prefix = str(region.get("voucher_prefix") or region.get("id", "XX")[:2].upper())
-    no = _next_no(records, prefix)
+    if record is None:
+        prefix = str(region.get("voucher_prefix") or region.get("id", "XX")[:2].upper())
+        no = _next_no(records, prefix)
+    else:
+        no = str(record.get("no") or "")
+        if not no:
+            prefix = str(region.get("voucher_prefix") or region.get("id", "XX")[:2].upper())
+            no = _next_no(records, prefix)
 
     pdf = _new_pdf(app_dir)
     if kind == "mexico":
-        _build_mexico(pdf, region, result, booking_file, no, now)
+        _build_mexico(pdf, region, result, booking_file, no, now, data_date)
         title = "订舱申请凭证"
-        record = _record_mexico(region, result, booking_file, no, now, "")
+        fresh = _record_mexico(region, result, booking_file, no, now, "", data_date)
     else:
-        _build_russia(pdf, region, result, booking or {}, no, now)
+        _build_russia(pdf, region, result, booking or {}, no, now, data_date)
         title = "发货额度申请凭证"
-        record = _record_russia(region, result, booking or {}, no, now, "")
+        fresh = _record_russia(region, result, booking or {}, no, now, "", data_date)
 
     pdf_name = _safe(no + "_" + title) + ".pdf"
     target = voucher_dir(region_base)
@@ -440,14 +452,17 @@ def generate_voucher(region, region_base, app_dir, result, booking=None, booking
     _lock(pdf)
     pdf.output(path)
 
-    record["kind"] = kind
-    record["region_id"] = region.get("id")
-    record["region_name"] = (region.get("name") or "").replace("大区", "")
-    record["pdf"] = pdf_name
-    records.append(record)
+    fresh["kind"] = kind
+    fresh["region_id"] = region.get("id")
+    fresh["region_name"] = (region.get("name") or "").replace("大区", "")
+    fresh["pdf"] = pdf_name
+    if record is None:
+        records.append(fresh)
+    else:
+        record.update(fresh)      # 同一编号：刷新归档记录（金额/文件/生成时间/数据日期）
     save_ledger(region_base, records)
     try:
         _export_ledger(kind, records, region_base)
     except Exception as exc:      # 台账 Excel 被占用等情况不影响凭证下载
         print("凭证台账 Excel 写入失败（可忽略）：", exc)
-    return path, record
+    return path, fresh
