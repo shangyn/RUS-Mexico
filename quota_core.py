@@ -1095,7 +1095,7 @@ def split_tid_payment(payment, tid_value, scope_info):
     """按“梯号”把一行表B回款折算成“本批展示梯”的份额（金额以表B行金额为准）。
 
     返回 (折算后金额, 提示文本)；整行都在本批范围内时提示为 None。
-    权重优先用 已回款比例×合同额（台账），全为 0 时退回合同额权重。
+    权重按 合同额 分摊：该梯合同额 ÷ 行内梯号合同额合计 × 行金额；合同额缺失时退回 已回款比例×合同额。
     """
     ladders = parse_tid_ladders(tid_value)
     if not ladders:
@@ -1104,7 +1104,7 @@ def split_tid_payment(payment, tid_value, scope_info):
     if ladders <= in_scope:
         return payment, None
     outside = "、".join(str(n) + "#" for n in sorted(ladders - in_scope))
-    for kind, weights in (("已回款比例", scope_info["pay_w"]), ("合同额", scope_info["amt_w"])):
+    for kind, weights in (("合同额", scope_info["amt_w"]), ("已回款比例", scope_info["pay_w"])):
         base = sum(weights.get(n, 0.0) for n in ladders)
         if base <= 0:
             continue
