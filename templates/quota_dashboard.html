@@ -401,7 +401,7 @@
             </tfoot>
           </table>
         </div>
-        <p class="note detail-note">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
+        <p class="note detail-note">金额单位：美元列 = 万美元，人民币列 = 万元，均保留两位小数。最后一行合计 = 各合同行（块首行）之和，梯号明细行是块内拆分、不重复计入（在 Excel 里整列手工求和会比合计行翻倍）。合同行 = 该合同合计；<span class="chip" style="background:#ddebf7">浅蓝</span> = 已组A梯号明细；<span class="chip" style="background:#fff2cc">浅黄</span> = 已订舱未组A梯号明细。「合同额」= 本批展示梯（已组A未收满 + 订舱清单指定）的台账合同额合计，合同里未展示的梯不计入合同额、回款也不计（同口径）。回款先抵设备款：设备欠款 J = (已组A设备 + 已订舱未组A设备) − 已回款（小于 0 取 0）；海运费欠款 K：J = 0 时 K = 合同额 − 已回款，否则 K = 合同额 − 已回款 − J。</p>
       </div>
       {{ upload_panel_mexico(region) }}
 

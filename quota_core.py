@@ -1389,7 +1389,11 @@ def compute_mexico(region, data_dir, output_dir=None):
             rate = rates[0]
             if len(rates) > 1:
                 warnings.append(contract + "：表C 存在多个汇率 " + str(rates) + "，取第一个")
-        amount = float(rows["合同额（原币）"].sum())
+        # 合同额 B 的口径：只取「本批展示梯」（已组A未收满 + 订舱清单指定）的台账合同额合计，
+        # 与 D/G 列同范围；合同里既未组A又未订舱的梯不计入（与回款按梯号折算保持一致）。
+        full_amount = float(rows["合同额（原币）"].sum())
+        display_ladders = set()
+        b_amount = 0.0
 
         details = []
         # 已组A部分：组A日期非空 且 未收满（Q3 确认口径）
@@ -1408,6 +1412,8 @@ def compute_mexico(region, data_dir, output_dir=None):
                 warnings.append(contract + " " + str(int(ladder)) + "#：预算成本帐无该标的号，海运费按 0")
             row_amount = float(row["合同额（原币）"])
             d_amount += row_amount
+            b_amount += row_amount
+            display_ladders.add(int(ladder))
             e_fee += fee
             details.append({"ladder": int(ladder), "group": "ga",
                             "amount": _mex_round(row_amount),
@@ -1443,11 +1449,21 @@ def compute_mexico(region, data_dir, output_dir=None):
                                     "#：预算成本帐无该标的号，海运费按 0")
                 row_amount = float(row["合同额（原币）"])
                 g_amount += row_amount
+                b_amount += row_amount
+                display_ladders.add(int(ladder))
                 h_fee += fee
                 details.append({"ladder": int(ladder), "group": "bk",
                                 "amount": _mex_round(row_amount),
                                 "freight": _mex_round(fee),
                                 "equip": _mex_round(row_amount - fee)})
+
+        all_ladders = {int(v) for v in rows["_ladder"].dropna().tolist()}
+        missing = sorted(all_ladders - display_ladders)
+        if missing:
+            warnings.append(contract + "：合同额只按本批展示梯合计 " +
+                            format(_mex_wan(b_amount), ",.2f") + " 万美元（合同全量 " +
+                            format(_mex_wan(full_amount), ",.2f") + " 万美元）；未展示梯 " +
+                            "、".join(str(n) + "#" for n in missing) + " 不计入合同额与回款口径")
 
         if key in keys_a and booking is not None:
             source = "组A+订舱"
@@ -1460,12 +1476,12 @@ def compute_mexico(region, data_dir, output_dir=None):
         i_amount = _mex_round(g_amount - h_fee)
         c_amount = _mex_round(payment_fx.get(contract, 0.0))
         j_amount = _mex_round(max(0.0, f_amount + i_amount - c_amount))
-        k_amount = _mex_round(amount - c_amount) if j_amount == 0 else \
-            _mex_round(amount - c_amount - j_amount)
+        k_amount = _mex_round(b_amount - c_amount) if j_amount == 0 else \
+            _mex_round(b_amount - c_amount - j_amount)
         # 展示与导出一律按「万美元 / 万元」（÷10000，两位小数），与俄罗斯的「万元」口径对齐
         blocks.append({
             "contract": contract, "source": source,
-            "B": _mex_wan(amount), "C": _mex_wan(c_amount),
+            "B": _mex_wan(b_amount), "C": _mex_wan(c_amount),
             "D": _mex_wan(d_amount), "E": _mex_wan(e_fee), "F": _mex_wan(f_amount),
             "G": _mex_wan(g_amount), "H": _mex_wan(h_fee), "I": _mex_wan(i_amount),
             "J": _mex_wan(j_amount), "K": _mex_wan(k_amount), "L": round(rate, 4),

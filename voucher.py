@@ -362,7 +362,7 @@ def _build_mexico(pdf, region, result, booking_file, no, created_at, data_date):
 
     _section(pdf, "二、欠款发货额度快照（单位：万美元）")
     _table(pdf, ["项目", "金额（万美元）", "说明"],
-           [["合同额合计", _money(totals["B"]), "纳入口径合同额合计"],
+           [["合同额合计", _money(totals["B"]), "本批展示梯（已组A + 已订舱）合计"],
             ["已回款合计", _money(totals["C"]), "表B + 表E抵佣金 + 表R"],
             ["已组A金额合计", _money(totals["D"]), "含设备与海运费"],
             ["已组A设备", _money(totals["F"]), "回款优先抵设备款"],
