@@ -6,7 +6,7 @@
 <title>发货额度看板 · 多区域</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; background: #eef1f6; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2d3d; }
+  body { margin: 0; background: #eef2f7; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2d3d; }
   .container { max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; }
   header.hero { border-radius: 16px; padding: 26px 30px; color: #fff;
     background: linear-gradient(120deg, #1e3a8a, #2563eb 55%, #38bdf8);
@@ -19,7 +19,7 @@
   .tabs { display: flex; gap: 12px; margin: 20px 0 16px; flex-wrap: wrap; }
   .tab { border: none; background: #fff; color: #475569; font-size: 15px; font-weight: 600;
     padding: 10px 28px; border-radius: 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.06); transition: .15s; }
-  .tab:hover { color: #1d4ed8; }
+  .tab:hover { color: #1d4ed8; background: #eff6ff; transform: translateY(-1px); }
   .tab.active { background: linear-gradient(120deg, #2563eb, #3b82f6); color: #fff;
     box-shadow: 0 4px 12px rgba(37,99,235,.35); }
   .tab-panel { display: none; }
@@ -168,6 +168,8 @@
 </style>
 </head>
 <body>
+{% set nav_active = 'dashboard' %}
+{% include '_quota_nav.html' %}
 <div class="container">
 
   <header class="hero">

@@ -25,6 +25,8 @@ from flask import Flask, render_template, request, send_file, abort, redirect, u
 from quota_core import (compute_region, compute_booking, load_main_config, find_file,
                        save_booking_result, merge_booking_into_rows, write_region_excel)
 from quota_core import compute_mexico
+import quota_shared
+import quota_thailand2
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_ROOT = os.path.join(BASE_DIR, "workspaces", "quota")
@@ -669,6 +671,161 @@ def voucher(region_id):
     except Exception as e:
         return back("凭证生成失败：" + str(e))
     return send_file(path, as_attachment=True, download_name=os.path.basename(path))
+
+
+THAILAND2_LADDER_BASENAME = "待发货梯号"
+
+
+def module_meta_path(module_id):
+    return os.path.join(quota_thailand2.module_root(module_id), CACHE_META_NAME)
+
+
+def load_module_meta(module_id):
+    path = module_meta_path(module_id)
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+    return {}
+
+
+def save_module_meta(module_id, meta):
+    path = module_meta_path(module_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def module_ladder_path(module_id):
+    data_dir = quota_thailand2.module_dirs(module_id)["data"]
+    if not os.path.isdir(data_dir):
+        return None
+    candidates = [os.path.join(data_dir, name) for name in os.listdir(data_dir)
+                  if name.startswith(THAILAND2_LADDER_BASENAME + ".")]
+    return max(candidates, key=os.path.getmtime) if candidates else None
+
+
+def _shared_page_context(errors=None):
+    return {
+        "fields": quota_shared.build_fields(),
+        "ready": quota_shared.is_ready(),
+        "shared_version": quota_shared.version(),
+        "errors": errors or [],
+        "msg": request.args.get("msg", ""),
+    }
+
+
+@app.route("/shared")
+def shared_page():
+    return render_template("quota_shared.html", **_shared_page_context())
+
+
+@app.route("/shared/run", methods=["POST"])
+def shared_run():
+    if request.form.get("password", "") != UPLOAD_PASSWORD:
+        return render_template("quota_shared.html",
+                               **_shared_page_context(["密码错误，请重新输入"]))
+    files = {slot: request.files.get(slot) for slot in quota_shared.SHARED_SLOTS}
+    try:
+        result = quota_shared.save_upload(files)
+    except Exception as exc:
+        return render_template("quota_shared.html",
+                               **_shared_page_context(["保存失败：" + str(exc)]))
+    if not result.get("ok"):
+        return render_template("quota_shared.html",
+                               **_shared_page_context(result.get("errors") or ["保存失败"]))
+    return redirect(url_for("shared_page", msg="公共数据已更新，版本：" + result.get("version", "")))
+
+
+def _module_page_context(module_id, errors=None):
+    module = quota_thailand2.get_module(module_id)
+    if module is None:
+        abort(404)
+    result = quota_thailand2.load_result(module_id)
+    meta = load_module_meta(module_id)
+    shared_version = quota_shared.version()
+    stale = bool(result and shared_version and result.get("shared_version") != shared_version)
+    ladder_path = module_ladder_path(module_id)
+    return {
+        "module": module,
+        "result": result,
+        "shared_ready": quota_shared.is_ready(),
+        "shared_version": shared_version,
+        "shared_fields": quota_shared.build_fields(),
+        "ladder_file": os.path.basename(ladder_path) if ladder_path else "",
+        "ladder_original": (meta.get("ladder_file") or {}).get("original") or "",
+        "ladder_uploaded_at": (meta.get("ladder_file") or {}).get("uploaded_at") or "",
+        "stale": stale,
+        "errors": errors or [],
+        "msg": request.args.get("msg", ""),
+    }
+
+
+@app.route("/thailand2")
+def thailand2_page():
+    return render_template("quota_thailand2.html", **_module_page_context("thailand2"))
+
+
+@app.route("/thailand2/run", methods=["POST"])
+def thailand2_run():
+    if request.form.get("password", "") != UPLOAD_PASSWORD:
+        return render_template("quota_thailand2.html",
+                               **_module_page_context("thailand2", ["密码错误，请重新输入"]))
+    if not quota_shared.is_ready():
+        return render_template("quota_thailand2.html",
+                               **_module_page_context("thailand2", ["公共数据尚未上传齐全，请先到「公共数据」页面完成上传"]))
+    module_id = "thailand2"
+    upload_path = None
+    fs = request.files.get("ladder_file")
+    if fs is not None and fs.filename:
+        ext = os.path.splitext(fs.filename)[1].lower() or ".xlsx"
+        if ext not in (".xls", ".xlsx"):
+            return render_template("quota_thailand2.html",
+                                   **_module_page_context(module_id, ["请上传 .xls 或 .xlsx 文件"]))
+        data_dir = quota_thailand2.module_dirs(module_id)["data"]
+        os.makedirs(data_dir, exist_ok=True)
+        for name in list(os.listdir(data_dir)):
+            if name.startswith(THAILAND2_LADDER_BASENAME + "."):
+                try:
+                    os.remove(os.path.join(data_dir, name))
+                except OSError:
+                    pass
+        upload_path = os.path.join(data_dir, THAILAND2_LADDER_BASENAME + ext)
+        fs.save(upload_path)
+        meta = load_module_meta(module_id)
+        meta["ladder_file"] = {
+            "original": fs.filename,
+            "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        save_module_meta(module_id, meta)
+    else:
+        upload_path = module_ladder_path(module_id)
+        if not upload_path and not quota_thailand2.load_ledger(module_id).get("items"):
+            return render_template("quota_thailand2.html",
+                                   **_module_page_context(module_id, ["首次计算请上传待发货梯号 Excel"]))
+    try:
+        quota_thailand2.compute_module(module_id, upload_path=upload_path)
+    except Exception as exc:
+        return render_template("quota_thailand2.html",
+                               **_module_page_context(module_id, ["计算失败：" + str(exc)]))
+    return redirect(url_for("thailand2_page", msg="额度已更新"))
+
+
+@app.route("/thailand2/download")
+def thailand2_download():
+    module = quota_thailand2.get_module("thailand2")
+    if module is None:
+        abort(404)
+    out_dir = quota_thailand2.module_dirs("thailand2")["out"]
+    xlsx = os.path.join(out_dir, str(module.get("out_prefix") or "欠款发货额度统计-泰国2") + ".xlsx")
+    if not os.path.isfile(xlsx):
+        abort(404)
+    return send_file(xlsx, as_attachment=True, download_name=os.path.basename(xlsx))
 
 
 if __name__ == "__main__":

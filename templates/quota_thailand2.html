@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ module.name }} · 欠款发货额度</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef2f7; color: #1e293b; font-family: "Microsoft YaHei", Arial, sans-serif; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 18px 48px; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .sub { color: #64748b; margin: 0 0 18px; font-size: 14px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; margin-bottom: 16px; box-shadow: 0 6px 18px rgba(15,23,42,.04); }
+    .msg { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; }
+    .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; }
+    .err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; }
+    .err ul, .warn ul { margin: 0; padding-left: 18px; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 16px; }
+    .metric { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 15px; }
+    .metric .k { color: #64748b; font-size: 12px; margin-bottom: 7px; }
+    .metric .v { font-size: 23px; font-weight: 700; }
+    .metric .v.red { color: #dc2626; }
+    .metric .v.blue { color: #2563eb; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { border: 1px solid #dbeafe; padding: 6px 8px; text-align: left; white-space: nowrap; }
+    th { background: #e0efff; position: sticky; top: 0; z-index: 1; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .scroll { max-height: 560px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+    .file { width: 100%; padding: 8px; border: 1px dashed #93c5fd; border-radius: 8px; background: #f8fbff; }
+    .pass { width: 220px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    .btn { display: inline-block; border: 0; border-radius: 10px; padding: 10px 18px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; text-decoration: none; }
+    .btn.gray { background: #475569; }
+    .muted { color: #64748b; font-size: 12px; }
+    .bad { color: #b91c1c; font-weight: 600; }
+    .ok { color: #047857; font-weight: 600; }
+    .row { margin-bottom: 12px; }
+    .row label { display: block; font-weight: 600; margin-bottom: 5px; }
+    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+    @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+{% set nav_active = 'thailand2' %}
+{% include '_quota_nav.html' %}
+<div class="wrap">
+  <h1>{{ module.name }} · 欠款发货额度</h1>
+  <p class="sub">额度 {{ module.quota_limit_wan | f2 }} 万元；{% if module.match_mode == 'agent' %}按代理商 {{ module.agent_name }} 统计{% else %}按模块 {{ module.module_name }} 统计{% endif %}；组A日期视为实际发货日期。</p>
+  {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+  {% if errors %}
+  <div class="err"><ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  {% if not shared_ready %}
+  <div class="warn">公共数据尚未齐全，请先到 <a href="{{ url_for('shared_page') }}">公共数据</a> 页面完成上传。</div>
+  {% elif stale %}
+  <div class="warn">公共数据已更新（{{ shared_version }}），当前结果基于旧版本，请重新计算。</div>
+  {% endif %}
+
+  {% if result %}
+  <div class="cards">
+    <div class="metric"><div class="k">总额度（万元）</div><div class="v">{{ result.quota_limit_wan | f2 }}</div></div>
+    <div class="metric"><div class="k">当前占用（万元）</div><div class="v blue">{{ result.occupied_wan | f2 }}</div></div>
+    <div class="metric"><div class="k">可用额度（万元）</div><div class="v {{ 'red' if result.over_quota else '' }}">{{ result.available_wan | f2 }}</div></div>
+    <div class="metric"><div class="k">欠款 / 待组A / 已补齐</div><div class="v">{{ result.debt_count }} / {{ result.pending_group_a_count }} / {{ result.paid_count }}</div></div>
+  </div>
+  <div class="cards">
+    <div class="metric"><div class="k">本次新增欠款（万元）</div><div class="v blue">{{ result.new_wan | f2 }}</div></div>
+    <div class="metric"><div class="k">本次新增梯数</div><div class="v">{{ result.new_count }}</div></div>
+    <div class="metric"><div class="k">本次释放金额（万元）</div><div class="v ok">{{ result.released_wan | f2 }}</div></div>
+    <div class="metric"><div class="k">本次增加金额（万元）</div><div class="v red">{{ result.increase_wan | f2 }}</div></div>
+  </div>
+  {% if result.over_quota %}
+  <div class="err">已超额 {{ result.over_quota_wan | f2 }} 万元。系统允许继续计算，请业务确认。</div>
+  {% endif %}
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <b>台账 / 本次变化</b>
+      <span class="muted">公共数据版本：{{ result.shared_version or '未记录' }}；计算时间：{{ result.generated_at }}</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>合同号</th><th>梯号</th><th>状态</th><th>本次变化</th><th class="num">梯子合同额</th><th class="num">合同已回款</th><th class="num">本梯分摊回款</th><th class="num">当前占用/欠款</th><th>组A日期</th><th>到期日</th><th>备注</th></tr></thead>
+        <tbody>
+        {% for item in result['items'] %}
+        <tr>
+          <td>{{ item.contract }}</td>
+          <td>{{ item.bid or (item.ladder ~ '#') }}</td>
+          <td>{{ item.status }}</td>
+          <td>{{ item.change or '' }}</td>
+          <td class="num">{{ item.ladder_amount_wan | f2 }}</td>
+          <td class="num">{{ item.contract_paid_wan | f2 }}</td>
+          <td class="num">{{ item.allocated_paid_wan | f2 }}</td>
+          <td class="num {{ 'bad' if item.status == '欠款中' else '' }}">{{ item.outstanding_wan | f2 }}</td>
+          <td>{{ item.group_a_date or '—' }}</td>
+          <td>{{ item.due_date or '—' }}</td>
+          <td>{{ item.remark or '' }}</td>
+        </tr>
+        {% endfor %}
+        {% if not result['items'] %}
+        <tr><td colspan="11" class="muted">暂无台账记录。</td></tr>
+        {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px">
+      <a class="btn gray" href="{{ url_for('thailand2_download') }}">下载 Excel</a>
+    </div>
+  </div>
+  {% if result.warnings or result.payment_errors %}
+  <div class="warn">
+    <b>计算提示</b>
+    <ul>
+      {% for w in result.warnings %}<li>{{ w }}</li>{% endfor %}
+      {% for e in result.payment_errors %}<li>{{ e[0] }}：{{ e[1] }}（{{ e[2] }}）</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <div class="card">
+    <h3 style="margin-top:0">上传待发货梯号并计算</h3>
+    <p class="muted">有历史上传或台账时，可以不选文件直接重算。首次计算必须上传梯号文件。</p>
+    <form method="post" action="{{ url_for('thailand2_run') }}" enctype="multipart/form-data">
+      <div class="row">
+        <label>待发货梯号 Excel</label>
+        <input class="file" type="file" name="ladder_file" accept=".xls,.xlsx">
+        <div class="muted">当前：{{ ladder_original or ladder_file or '未上传' }}{% if ladder_uploaded_at %}；上传日期：{{ ladder_uploaded_at }}{% endif %}</div>
+      </div>
+      <div class="row">
+        <label>更新密码</label>
+        <input class="pass" type="password" name="password" required>
+      </div>
+      <button class="btn" type="submit">计算 / 更新额度</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <b>公共数据状态</b>
+    <table style="margin-top:10px">
+      <thead><tr><th>用途</th><th>当前文件</th><th>上传日期</th></tr></thead>
+      <tbody>
+      {% for f in shared_fields %}
+      <tr><td>{{ f.label }}</td><td>{{ f.original or '（未上传）' }}</td><td>{{ f.uploaded_at or '（无记录）' }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

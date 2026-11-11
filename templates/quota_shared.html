@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>公共数据 · 发货额度</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef2f7; color: #1e293b; font-family: "Microsoft YaHei", Arial, sans-serif; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 24px 18px 48px; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .sub { color: #64748b; margin: 0 0 18px; font-size: 14px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; margin-bottom: 16px; box-shadow: 0 6px 18px rgba(15,23,42,.04); }
+    .msg { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; }
+    .err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; }
+    .err ul { margin: 0; padding-left: 18px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid #dbeafe; padding: 7px 9px; text-align: left; vertical-align: top; }
+    th { background: #e0efff; }
+    .file { width: 100%; padding: 8px; border: 1px dashed #93c5fd; border-radius: 8px; background: #f8fbff; }
+    .row { margin-bottom: 12px; }
+    .row label { display: block; font-weight: 600; margin-bottom: 5px; }
+    .pass { width: 220px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    .btn { display: inline-block; border: 0; border-radius: 10px; padding: 10px 18px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; text-decoration: none; }
+    .muted { color: #64748b; font-size: 12px; }
+    .bad { color: #b91c1c; font-weight: 600; }
+    .ok { color: #047857; font-weight: 600; }
+  </style>
+</head>
+<body>
+{% set nav_active = 'shared' %}
+{% include '_quota_nav.html' %}
+<div class="wrap">
+  <h1>公共数据</h1>
+  <p class="sub">表C / 表B / 表E / 表R / 汇率 / 表D 统一维护；有缓存时允许不重复上传。</p>
+  {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+  {% if errors %}
+  <div class="err"><ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <b>当前公共数据版本：{{ shared_version or '未建立' }}</b>
+      <span class="{{ 'ok' if ready else 'bad' }}">{{ '已齐全' if ready else '未齐全' }}</span>
+    </div>
+    <table>
+      <thead><tr><th>用途</th><th>当前文件名</th><th>上传日期</th></tr></thead>
+      <tbody>
+      {% for f in fields %}
+      <tr>
+        <td>{{ f.label }}{% if f.required %} <span class="muted">（必需）</span>{% else %} <span class="muted">（可选）</span>{% endif %}</td>
+        <td>{{ f.original or '（未上传）' }}</td>
+        <td>{{ f.uploaded_at or '（无记录）' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <form method="post" action="{{ url_for('shared_run') }}" enctype="multipart/form-data">
+      {% for f in fields %}
+      <div class="row">
+        <label>{{ f.label }}{% if f.required and not f.present %} <span class="bad">（本次需上传）</span>{% elif not f.required %} <span class="muted">（可选）</span>{% endif %}</label>
+        <input class="file" type="file" name="{{ f.slot }}" accept="{{ f.accept }}">
+      </div>
+      {% endfor %}
+      <div class="row">
+        <label>更新密码</label>
+        <input class="pass" type="password" name="password" required>
+      </div>
+      <button class="btn" type="submit">保存公共数据</button>
+      <span class="muted" style="margin-left:10px">未选择的文件将沿用当前缓存。</span>
+    </form>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# 公共数据模式下的模块配置（俄罗斯/墨西哥仍使用 quota_regions.yaml）
+modules:
+  - id: thailand2
+    name: 泰国2TAIZHONG HESHENG
+    enabled: true
+    kind: thailand2
+    data_mode: shared
+    module_name: 泰国2
+    match_mode: agent
+    agent_name: "泰国2TAIZHONG HESHENG"
+    shared_required_slots:
+      - table_c
+      - table_b
+      - table_e
+      - table_r
+      - exchange_rate
+    quota_limit_wan: 198
+    date_start: "2024-01-01"
+    exclude_status:
+      - 已作废
+    out_prefix: 欠款发货额度统计-泰国2TAIZHONG HESHENG
+    voucher_prefix: TH2
+    module_slots:
+      ladder_file:
+        label: 待发货梯号 Excel
+        accept: ".xlsx,.xls"
+        optional: true
+

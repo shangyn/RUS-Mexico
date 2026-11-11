@@ -9,7 +9,7 @@ paths:
   output_dir: "输出"
   table_b: "24-26年外币回款台账1(4).xlsx"
   table_c: "国贸合同标的台账(10).xlsx"
-  table_d: "国家-市场-业务员6.2(1).xlsx"
+  table_d: "国家-市场-业务员9.29.xlsx"
   table_e: "gm_ht_hthkmx(44).xls"
   table_r: "人民币回款台账1.xlsx"
   exchange_rate: "汇率对应txt.txt"
@@ -17,6 +17,7 @@ paths:
   budget_cost: "预算成本帐.xlsx"
   output_table_f: "表F_发货合同收款统计.xlsx"
   output_table_f1: "表F1_发货合同收款统计(全量).xlsx"
+  output_table_h: "表H_未发货梯号预测清单.xlsx"
   error_log: "报错文档.xlsx"
 
 # ---- 表B: 三个年度sheet的列名映射 ----
@@ -56,16 +57,27 @@ table_c:
   payment_col: "付款方式"           # AB列
   sales_col: "业务员"               # BB列
   ratio_col: "已回款比例（原币）"   # BN列
+  # 以下列供表H（未发货梯号预测清单）使用
+  elevator_col: "标的编号"          # B列 — 梯号（每台电梯一行）
+  currency_col: "币种"              # D列
+  orig_amount_col: "合同额（原币）"  # E列
+  sign_date_col: "签订日期"          # W列
+  schedule_date_col: "排产日期"       # AP列（表H「已排产」筛选用）
+  quantity_col: "台数"              # H列
 
 # ---- 表D: 国家-市场-业务员表 ----
 table_d:
+  # 大区名标准化：源文件中的大区名 → 展示名（源文件用负责人姓氏占位，如 陈/刘）
+  region_rename:
+    "陈": "大区1"
+    "刘": "大区2"
   sheet3:
     name: "Sheet3"
     country_col: "国家"               # A列
     module_col: "2026年对应模块"       # D列
-    region_col: "2026九大区"           # E列
+    region_col: "2026对应大区"         # E列
   sales_market:
-    name: "业务员-市场"
+    name: "国家-业务员"
     country_col: "国家"               # A列
     module_col: "模块"                # B列
     manager_col: "模块经理"            # D列
@@ -73,6 +85,7 @@ table_d:
 # ---- 表E: gm_ht_hthkmx 合同回款明细 ----
 table_e:
   contract_col: "合同编号"          # A列
+  elevator_col: "标的编号"          # B列 — 梯号（按梯号回款工具使用）
   type_col: "款项类型"              # I列
   amount_col: "回款金额(原币)"        # K列
   currency_col: "币种"              # P列
@@ -95,10 +108,23 @@ filters:
 # ---- 人民币币种判断 ----
 rmb_currencies: ["人民币", "人民币元", "CNY"]
 
+# ---- 表H: 未发货（未组A）梯号预测清单 ----
+table_h:
+  sign_date_start: "2024-01-01"     # 签订日期 >= 此值（最近三年：24/25/26）
+  exclude_status: ["已作废"]         # 排除的产品状态
+  require_scheduled: true           # true=只保留「排产日期(AP列)不为空」的梯号
+  status_options:                   # 模块负责人可选状态（写入表H预留列，供后续选择页使用）
+    - "可发货"
+    - "大概率发货"
+    - "等回款"
+    - "暂不发货"
+    - "待定"
+
 # ---- 回款固定合同号: 固定追加到表F的合同 ----
 table_fixed:
   file: "回款固定合同号.xlsx"
   header_rows: 2                    # Row0标题, Row1副标题，Row2为列头
+  use_table_d_mapping: true          # true=模块/模主也按表D Sheet3(国家→2026模块)对齐，避免固定文件里的旧模块名混入
   columns:
     contract_col: "合同号"
     amount_col: "合同额"            # 已是万元
